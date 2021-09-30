@@ -1,5 +1,5 @@
-baseURL: "https://examplesite.com/"
-title: ExampleSite
+baseURL: "http://danshea.net/"
+title: danshea.net
 paginate: 5
 theme: PaperMod
 

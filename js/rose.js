@@ -1,6 +1,5 @@
-let fr = 0.5;
+let fr = 1;
 var size = document.getElementById('p5_rose').offsetWidth;
-
 
 function setup() {
 	var myCanvas = createCanvas(size, size);
@@ -16,7 +15,7 @@ function draw() {
 	d = random (50);
 
 	translate(width/2, height/2);
-  	stroke(255);
+  	stroke(color(localStorage.getItem("pref-theme") == 'dark' ? 'white' : 'black'));
 
 	noFill();
 	beginShape();
@@ -30,8 +29,8 @@ function draw() {
 	endShape(CLOSE);
 }
 
-function mouseClicked() {
-	if (fr != 0) fr = 0;
-	else if (fr == 0) fr = 0.5;
-	frameRate(fr);
-}
+// function mouseClicked() {
+// 	if (fr != 0) fr = 0;
+// 	else if (fr == 0) fr = 0.5;
+// 	frameRate(fr);
+// }

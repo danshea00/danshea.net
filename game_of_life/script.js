@@ -46,69 +46,105 @@ void main() {
 `;
 
 const simFragSource = `
-// Fragment shader for Game of Life simulation step
+// Fragment shader for Game of Life simulation step (with aging)
 precision mediump float;
 
-uniform sampler2D u_prevState; // Previous game state texture
+uniform sampler2D u_prevState; // Previous game state texture (R stores age/255.0)
 uniform vec2 u_resolution;     // Resolution of the texture/canvas
 
 varying vec2 v_texCoord;       // Texture coordinate from vertex shader
 
-// Game of Life rules (can be uniforms if we want them configurable later)
+// Game of Life rules
 const float BORN_MIN = 3.0;
 const float BORN_MAX = 3.0;
 const float SURVIVE_MIN = 2.0;
 const float SURVIVE_MAX = 3.0;
+const float MAX_AGE_VALUE = 255.0; // Max actual age we can represent (fits in a byte)
 
-// Helper function to get cell state (0.0 for dead, 1.0 for alive)
-// We'll use the red channel to store the state.
-float getCell(vec2 offset) {
+// Returns actual age of a cell (e.g., 0, 1, 2, ... up to MAX_AGE_VALUE)
+float getActualAge(vec2 offset) {
     vec2 texelSize = 1.0 / u_resolution;
-    return texture2D(u_prevState, v_texCoord + offset * texelSize).r;
+    // Texture stores age normalized (age_byte_value / 255.0).
+    // So, texture2D(...).r is in [0,1]. Multiply by MAX_AGE_VALUE to get actual age.
+    return texture2D(u_prevState, v_texCoord + offset * texelSize).r * MAX_AGE_VALUE;
+}
+
+// Helper to check if a neighbor cell is alive (age > 0)
+float isNeighborAlive(vec2 offset) {
+    // A cell is alive if its actual age is > 0.5 (i.e., at least 1)
+    return step(0.5, getActualAge(offset));
 }
 
 void main() {
     float aliveNeighbors = 0.0;
     // Check 8 neighbors
-    aliveNeighbors += getCell(vec2(-1.0, -1.0));
-    aliveNeighbors += getCell(vec2( 0.0, -1.0));
-    aliveNeighbors += getCell(vec2( 1.0, -1.0));
-    aliveNeighbors += getCell(vec2(-1.0,  0.0));
-    aliveNeighbors += getCell(vec2( 1.0,  0.0));
-    aliveNeighbors += getCell(vec2(-1.0,  1.0));
-    aliveNeighbors += getCell(vec2( 0.0,  1.0));
-    aliveNeighbors += getCell(vec2( 1.0,  1.0));
+    aliveNeighbors += isNeighborAlive(vec2(-1.0, -1.0));
+    aliveNeighbors += isNeighborAlive(vec2( 0.0, -1.0));
+    aliveNeighbors += isNeighborAlive(vec2( 1.0, -1.0));
+    aliveNeighbors += isNeighborAlive(vec2(-1.0,  0.0));
+    aliveNeighbors += isNeighborAlive(vec2( 1.0,  0.0));
+    aliveNeighbors += isNeighborAlive(vec2(-1.0,  1.0));
+    aliveNeighbors += isNeighborAlive(vec2( 0.0,  1.0));
+    aliveNeighbors += isNeighborAlive(vec2( 1.0,  1.0));
 
-    float currentState = getCell(vec2(0.0, 0.0));
-    float newState = 0.0; // Dead by default
+    float currentActualAge = getActualAge(vec2(0.0, 0.0));
+    float newActualAge = 0.0; // Dead by default (age 0)
 
-    if (currentState > 0.5) { // If alive
+    if (currentActualAge > 0.5) { // If currently alive (actual age > 0)
         if (aliveNeighbors >= SURVIVE_MIN && aliveNeighbors <= SURVIVE_MAX) {
-            newState = 1.0; // Survives
+            // Survives: increment age, cap at MAX_AGE_VALUE
+            newActualAge = min(currentActualAge + 1.0, MAX_AGE_VALUE);
         }
-    } else { // If dead
+        // Else it dies, newActualAge remains 0.0
+    } else { // If currently dead (actual age is 0 or very close)
         if (aliveNeighbors >= BORN_MIN && aliveNeighbors <= BORN_MAX) {
-            newState = 1.0; // Born
+            newActualAge = 1.0; // Born: set age to 1
         }
     }
-    // Output new state (e.g., 1.0 for alive, 0.0 for dead) in the red channel
-    // Other channels can be 0 or 1 as well.
-    gl_FragColor = vec4(newState, newState, newState, 1.0);
+
+    // Output new actual age, scaled to [0,1] for storage in the R channel of the texture.
+    // G and B channels are set to 0. Alpha is 1.0.
+    gl_FragColor = vec4(newActualAge / MAX_AGE_VALUE, 0.0, 0.0, 1.0);
 }
 `;
 
 const displayFragSource = `
-// Fragment shader for displaying the Game of Life state
+// Fragment shader for displaying the Game of Life state with age coloring
 precision mediump float;
 
-uniform sampler2D u_gameState; // Current game state texture
+uniform sampler2D u_gameState; // Current game state texture (R channel has age/255.0)
 varying vec2 v_texCoord;       // Texture coordinate from vertex shader
 
+const float MAX_AGE_VALUE_DISPLAY = 255.0; // Should match MAX_AGE_VALUE in sim shader
+
+// Define colors for different age groups
+const vec3 COLOR_DEAD      = vec3(0.05, 0.05, 0.05); // Very dark gray for dead cells
+const vec3 COLOR_AGE_1     = vec3(0.2, 1.0, 0.2);   // Bright Green (newborn)
+const vec3 COLOR_AGE_2_5   = vec3(0.6, 1.0, 0.2);   // Lime Green (young)
+const vec3 COLOR_AGE_6_10  = vec3(1.0, 1.0, 0.2);   // Yellow (adult)
+const vec3 COLOR_AGE_11_15 = vec3(1.0, 0.7, 0.1);   // Orange (mature)
+const vec3 COLOR_AGE_16_20 = vec3(1.0, 0.4, 0.1);   // Darker Orange (old)
+const vec3 COLOR_AGE_21_PLUS= vec3(0.8, 0.1, 0.1);   // Dark Red (very old)
+
+// Function to map actual age to a color
+vec3 ageToColor(float actualAge) {
+    if (actualAge < 0.5) return COLOR_DEAD;        // Age 0 (dead)
+    if (actualAge < 1.5) return COLOR_AGE_1;       // Age 1
+    if (actualAge < 5.5) return COLOR_AGE_2_5;     // Age 2-5
+    if (actualAge < 10.5) return COLOR_AGE_6_10;   // Age 6-10
+    if (actualAge < 15.5) return COLOR_AGE_11_15;  // Age 11-15
+    if (actualAge < 20.5) return COLOR_AGE_16_20;  // Age 16-20
+    return COLOR_AGE_21_PLUS;                      // Age 21+
+}
+
 void main() {
-    // Read the state from the texture (assuming state is in the red channel)
-    // and output it as a color (e.g., black for alive, white for dead).
-    float state = texture2D(u_gameState, v_texCoord).r;
-    gl_FragColor = vec4(state, state, state, 1.0);
+    // Read the normalized age from the R channel of the texture ([0,1])
+    float normalizedAge = texture2D(u_gameState, v_texCoord).r;
+    // Convert to actual age (e.g., 0 to 255)
+    float actualAge = normalizedAge * MAX_AGE_VALUE_DISPLAY;
+
+    vec3 finalColor = ageToColor(actualAge);
+    gl_FragColor = vec4(finalColor, 1.0); // Output the calculated color
 }
 `;
 
@@ -424,7 +460,7 @@ function getMouseGridCoords(e) {
 
 function placeSelectedShapeOnTexture(texCoordR, texCoordC) {
     const shape = SHAPES[selectedShapeIndex];
-    const alivePixel = new Uint8Array([255, 255, 255, 255]); // RGBA for alive cell
+    const alivePixel = new Uint8Array([1, 0, 0, 255]); // R=1 (age 1), G=0, B=0, A=255
 
     shape.pattern.forEach(([origDr, origDc]) => {
         let dr = origDr - shape.centerOffset.r;
@@ -460,7 +496,7 @@ function drawCellOnTexture(texCoordR, texCoordC) {
      if (texCoordR < 0 || texCoordR >= textureHeight || texCoordC < 0 || texCoordC >= textureWidth) return;
 
     const pixels = new Uint8Array(1 * 1 * 4);
-    pixels[0] = 255; pixels[1] = 255; pixels[2] = 255; pixels[3] = 255; // White for alive
+    pixels[0] = 1; pixels[1] = 0; pixels[2] = 0; pixels[3] = 255; // R=1 (age 1), G=0, B=0
 
     gl.bindTexture(gl.TEXTURE_2D, textures[currentTextureIndex]);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, texCoordC, textureHeight - 1 - texCoordR, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);

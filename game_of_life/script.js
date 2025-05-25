@@ -593,6 +593,7 @@ function main() {
     }
     updateHudDisplay();
     requestAnimationFrame(gameLoop);
+    startGameSimulation();
 }
 
 main();

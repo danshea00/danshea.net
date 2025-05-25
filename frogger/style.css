@@ -1,0 +1,31 @@
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Prevent scrollbars */
+    background-color: #f0f0f0; /* Fallback background */
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column; /* Stack title and canvas */
+}
+
+h1 {
+    margin: 0; /* Remove default margins */
+    padding: 8px 0; /* Add some padding */
+    font-size: 1.6em; /* Slightly larger for visibility */
+    text-align: center;
+    width: 100%; /* Take full width */
+    background-color: #ddd; /* Light grey bar for the title */
+    flex-shrink: 0; /* Prevent title from shrinking */
+    box-sizing: border-box; /* Include padding in width/height */
+    z-index: 10; /* Ensure title is above canvas if overlap occurs */
+}
+
+canvas {
+    display: block; /* Remove any default spacing */
+    background-color: #70a1ff; /* Game background color */
+    border: none; /* Remove border */
+    width: 100%; /* Canvas takes full width of its parent */
+    flex-grow: 1; /* Canvas takes remaining vertical space */
+    box-sizing: border-box;
+}

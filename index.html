@@ -78,12 +78,7 @@
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/110/three.min.js"></script>
-<!-- Stats.js -->
-<!-- dat.gui -->
-
 <canvas id="canvas"></canvas>
-
-<!-- Shaders -->
 
 <script id='shader' type='x-shader/x-fragment'>
 uniform vec3        iResolution;
@@ -260,6 +255,8 @@ void main() {
     let deltaTime = 0.0;
     let startingTime = 1017.587699999926;
     let time = startingTime;
+    let physicsTimeAccumulator = 0.0;
+    const physicsTimeStep = 0.0016; // Slower fixed timestep for stable RK4 integrator
 
     let date = new THREE.Vector4();
 
@@ -294,10 +291,19 @@ void main() {
     let frameCounter = 0;
     let fractalTooltipElement = null;
 
-    // --- Instance 1 Physics & Params ---
-    let position1 = new THREE.Vector2(-0.2, 0); // Initial position for fractal 1
-    let velocity1 = new THREE.Vector2(0, 0.02);   // Reset initial velocity
+    // --- Physics State ---
+    let position1 = new THREE.Vector2();
+    let velocity1 = new THREE.Vector2();
+    let position2 = new THREE.Vector2();
+    let velocity2 = new THREE.Vector2();
+    let position3 = new THREE.Vector2();
+    let velocity3 = new THREE.Vector2();
+    let selectedOrbit;
 
+    let orbitSystemCenter = new THREE.Vector2(0,0);
+    let orbitSystemVelocity = new THREE.Vector2(0,0);
+
+    // --- Visual Parameters ---
     let shaderParams1 = {
         timeAnimationSpeed: 0.0015,
         patternFrequency: 0.1,
@@ -307,39 +313,26 @@ void main() {
         linkName: "GitHub"
     };
 
-    // --- Instance 2 Physics & Params ---
-    let position2 = new THREE.Vector2(0.2, 0);  // Initial position for fractal 2
-    let velocity2 = new THREE.Vector2(0, -0.02);  // Reset initial velocity
-
-    let position3 = new THREE.Vector2(0, 0.2);  // Initial position for fractal 3
-    let velocity3 = new THREE.Vector2(-0.015, 0); // Reset initial velocity
-
-let orbitSystemCenter = new THREE.Vector2(0,0);
-let orbitSystemVelocity = new THREE.Vector2(0,0);
-
     let shaderParams2 = {
-        timeAnimationSpeed: 0.0010, // Slightly different defaults for variety
+        timeAnimationSpeed: 0.0010,
         patternFrequency: 0.15,
         detailTimeFactor: 0.000002,
         paletteTimeFactor: 1.2,
         linkURL: "https://linkedin.com/in/danshea00",
         linkName: "LinkedIn"
     };
-let orbitParams = {
-    G: 0.0005, // Gravitational constant
-    mass1: 1.0,
-    mass2: 1.0,
-    mass3: 0.5,
-    mouseGravityStrength: 0.05, // Strength of mouse pull on the CoM (Increased for stronger pull)
-    damping: 0.001               // Damping for the CoM movement (Kept low for potential orbits)
-};
 
-    let shaderParams3 = JSON.parse(JSON.stringify(shaderParams2)); // Clone params for fractal 3
-    shaderParams3.paletteTimeFactor = 1.5; // Slightly different default
-    shaderParams3.linkURL = "game_of_life/index.html"; // Set unique link for Fractal 3
-    shaderParams3.linkName = "Game of Life"; // Set unique name for Fractal 3
-    delete shaderParams3.mousePullStrength; // Already done in a previous step if it was there
-    // delete shaderParams3.detailTimeFactor; // This should now be cloned and kept
+    let shaderParams3 = JSON.parse(JSON.stringify(shaderParams2));
+    shaderParams3.paletteTimeFactor = 1.5;
+    shaderParams3.linkURL = "conway/index.html";
+    shaderParams3.linkName = "Game of Life";
+    
+    // --- Physics Parameters ---
+    const G = 1.0; // Gravitational constant for the internal simulation
+    let orbitParams = {
+        mouseGravityStrength: 0.05,
+        damping: 0.05
+    };
 
     const gui = new dat.GUI({ autoPlace: false });
     document.getElementById('dat_gui_container').appendChild(gui.domElement);
@@ -364,35 +357,29 @@ let orbitParams = {
     f3.add(shaderParams3, 'detailTimeFactor', 0.0000001, 0.00001).name('Detail Speed');
     f3.add(shaderParams3, 'paletteTimeFactor', 0.1, 5.0).name('Palette Speed');
     f3.open();
-const fOrbit = gui.addFolder('Orbit');
-fOrbit.add(orbitParams, 'G', 0.00001, 0.02, 0.00001).name('G (Grav Const)');
-fOrbit.add(orbitParams, 'mass1', 0.1, 10.0).name('Mass 1');
-fOrbit.add(orbitParams, 'mass2', 0.1, 10.0).name('Mass 2');
-fOrbit.add(orbitParams, 'mass3', 0.1, 10.0).name('Mass 3');
-fOrbit.add(orbitParams, 'mouseGravityStrength', 0.0, 0.5, 0.001).name('Mouse Gravity CoM');
-fOrbit.add(orbitParams, 'damping', 0.0, 0.2, 0.001).name('CoM Damping');
-fOrbit.open();
 
-// --- GUI Toggle Logic ---
-const guiContainer = document.getElementById('dat_gui_container');
-window.addEventListener('keydown', function(event) {
-    if (event.code === 'Space') {
-        event.preventDefault(); // Prevent spacebar from scrolling page
-        if (guiContainer.style.display === 'none' || guiContainer.style.display === '') {
-            guiContainer.style.display = 'block'; // Or 'flex', or its original display type if known
-        } else {
-            guiContainer.style.display = 'none';
+    const fOrbit = gui.addFolder('System Controls');
+    fOrbit.add(orbitParams, 'mouseGravityStrength', 0.0, 0.5, 0.001).name('Mouse Gravity');
+    fOrbit.add(orbitParams, 'damping', 0.0, 0.2, 0.001).name('System Damping');
+    fOrbit.open();
+
+    // --- GUI Toggle Logic ---
+    const guiContainer = document.getElementById('dat_gui_container');
+    window.addEventListener('keydown', function(event) {
+        if (event.code === 'Space') {
+            event.preventDefault(); // Prevent spacebar from scrolling page
+            if (guiContainer.style.display === 'none' || guiContainer.style.display === '') {
+                guiContainer.style.display = 'block';
+            } else {
+                guiContainer.style.display = 'none';
+            }
         }
-    }
-});
-// Render targets for the two fractal instances
+    });
+
+    // Render targets for the three fractal instances
     let renderTarget1 = new THREE.WebGLRenderTarget(resolution.x, resolution.y, { type: framebufferType });
     let renderTarget2 = new THREE.WebGLRenderTarget(resolution.x, resolution.y, { type: framebufferType });
     let renderTarget3 = new THREE.WebGLRenderTarget(resolution.x, resolution.y, { type: framebufferType });
-
-    const audioContext = {
-        sampleRate: 0
-    };
 
     let buffers = [];
     const fractalShaderContent = document.getElementById('shader').textContent;
@@ -401,474 +388,351 @@ window.addEventListener('keydown', function(event) {
 
     // Buffer for Fractal Instance 1
     buffers.push({
-        Name: 'FractalInstance1',
-        File: 'shader',
-        LineOffset: 134,
-        Target: renderTarget1,
+        Name: 'FractalInstance1', File: 'shader', LineOffset: 134, Target: renderTarget1,
         Shader: new THREE.ShaderMaterial({
-            fragmentShader: fractalShaderContent,
-            vertexShader: defaultVertexShader,
-            depthWrite: false,
-            depthTest: false,
+            fragmentShader: fractalShaderContent, vertexShader: defaultVertexShader, depthWrite: false, depthTest: false,
             uniforms: {
-                iResolution: { value: resolution },
-                iTime: { value: 0.0 },
-                iTimeDelta: { value: 0.0 },
-                iFrame: { value: 0 },
-                iMouse: { value: mouse },
-                iMouseButton: { value: mouseButton },
-                iDate: { value: date },
-                u_timeAnimationSpeed: { value: shaderParams1.timeAnimationSpeed },
-                u_patternFrequency: { value: shaderParams1.patternFrequency },
-                u_detailTimeFactor: { value: shaderParams1.detailTimeFactor },
-                u_paletteTimeFactor: { value: shaderParams1.paletteTimeFactor },
-                u_visualFractalCenter: { value: position1 },
+                iResolution: { value: resolution }, iTime: { value: 0.0 }, iTimeDelta: { value: 0.0 }, iFrame: { value: 0 },
+                iMouse: { value: mouse }, iMouseButton: { value: mouseButton }, iDate: { value: date },
+                u_timeAnimationSpeed: { value: shaderParams1.timeAnimationSpeed }, u_patternFrequency: { value: shaderParams1.patternFrequency },
+                u_detailTimeFactor: { value: shaderParams1.detailTimeFactor }, u_paletteTimeFactor: { value: shaderParams1.paletteTimeFactor },
+                u_visualFractalCenter: { value: new THREE.Vector2() }, // Will be updated each frame
             }
         })
     });
 
     // Buffer for Fractal Instance 2
     buffers.push({
-        Name: 'FractalInstance2',
-        File: 'shader',
-        LineOffset: 134,
-        Target: renderTarget2,
+        Name: 'FractalInstance2', File: 'shader', LineOffset: 134, Target: renderTarget2,
         Shader: new THREE.ShaderMaterial({
-            fragmentShader: fractalShaderContent,
-            vertexShader: defaultVertexShader,
-            depthWrite: false,
-            depthTest: false,
+            fragmentShader: fractalShaderContent, vertexShader: defaultVertexShader, depthWrite: false, depthTest: false,
             uniforms: {
-                iResolution: { value: resolution },
-                iTime: { value: 0.0 },
-                iTimeDelta: { value: 0.0 },
-                iFrame: { value: 0 },
-                iMouse: { value: mouse },
-                iMouseButton: { value: mouseButton },
-                iDate: { value: date },
-                u_timeAnimationSpeed: { value: shaderParams2.timeAnimationSpeed },
-                u_patternFrequency: { value: shaderParams2.patternFrequency },
-                u_detailTimeFactor: { value: shaderParams2.detailTimeFactor },
-                u_paletteTimeFactor: { value: shaderParams2.paletteTimeFactor },
-                u_visualFractalCenter: { value: position2 },
+                iResolution: { value: resolution }, iTime: { value: 0.0 }, iTimeDelta: { value: 0.0 }, iFrame: { value: 0 },
+                iMouse: { value: mouse }, iMouseButton: { value: mouseButton }, iDate: { value: date },
+                u_timeAnimationSpeed: { value: shaderParams2.timeAnimationSpeed }, u_patternFrequency: { value: shaderParams2.patternFrequency },
+                u_detailTimeFactor: { value: shaderParams2.detailTimeFactor }, u_paletteTimeFactor: { value: shaderParams2.paletteTimeFactor },
+                u_visualFractalCenter: { value: new THREE.Vector2() }, // Will be updated each frame
             }
         })
     });
 
     // Buffer for Fractal Instance 3
     buffers.push({
-        Name: 'FractalInstance3',
-        File: 'shader',
-        LineOffset: 134, // Assuming same as others, adjust if fractal.glsl changes
-        Target: renderTarget3,
+        Name: 'FractalInstance3', File: 'shader', LineOffset: 134, Target: renderTarget3,
         Shader: new THREE.ShaderMaterial({
-            fragmentShader: fractalShaderContent,
-            vertexShader: defaultVertexShader,
-            depthWrite: false,
-            depthTest: false,
+            fragmentShader: fractalShaderContent, vertexShader: defaultVertexShader, depthWrite: false, depthTest: false,
             uniforms: {
-                iResolution: { value: resolution },
-                iTime: { value: 0.0 },
-                iTimeDelta: { value: 0.0 },
-                iFrame: { value: 0 },
-                iMouse: { value: mouse },
-                iMouseButton: { value: mouseButton },
-                iDate: { value: date },
-                u_timeAnimationSpeed: { value: shaderParams3.timeAnimationSpeed },
-                u_patternFrequency: { value: shaderParams3.patternFrequency },
-                u_detailTimeFactor: { value: shaderParams3.detailTimeFactor },
-                u_paletteTimeFactor: { value: shaderParams3.paletteTimeFactor },
-                u_visualFractalCenter: { value: position3 },
+                iResolution: { value: resolution }, iTime: { value: 0.0 }, iTimeDelta: { value: 0.0 }, iFrame: { value: 0 },
+                iMouse: { value: mouse }, iMouseButton: { value: mouseButton }, iDate: { value: date },
+                u_timeAnimationSpeed: { value: shaderParams3.timeAnimationSpeed }, u_patternFrequency: { value: shaderParams3.patternFrequency },
+                u_detailTimeFactor: { value: shaderParams3.detailTimeFactor }, u_paletteTimeFactor: { value: shaderParams3.paletteTimeFactor },
+                u_visualFractalCenter: { value: new THREE.Vector2() }, // Will be updated each frame
             }
         })
     });
 
     // Buffer for Compositing Pass
     buffers.push({
-        Name: 'CompositingPass',
-        File: 'compositingShader',
-        LineOffset: 0,
-        Target: null, // Render to screen
+        Name: 'CompositingPass', File: 'compositingShader', LineOffset: 0, Target: null,
         Shader: new THREE.ShaderMaterial({
-            fragmentShader: compositingShaderContent,
-            vertexShader: defaultVertexShader,
-            depthWrite: false,
-            depthTest: false,
+            fragmentShader: compositingShaderContent, vertexShader: defaultVertexShader, depthWrite: false, depthTest: false,
             uniforms: {
                 iResolution: { value: resolution },
                 tDiffuse1: { value: renderTarget1.texture },
                 tDiffuse2: { value: renderTarget2.texture },
-                tDiffuse3: { value: renderTarget3.texture } // Add new texture uniform
+                tDiffuse3: { value: renderTarget3.texture }
             }
         })
     });
-    let commonIncludes = [];
     
-
-    // WebGL2 inserts more lines into the shader
     if (isWebGL2) {
         for (let buffer of buffers) {
             buffer.LineOffset += 16;
         }
     }
-
     
-    // Uniforms Init
-
-    let texLoader = new THREE.TextureLoader();
-    
-
     let scene = new THREE.Scene();
-    let quad = new THREE.Mesh(
-        new THREE.PlaneGeometry(resolution.x, resolution.y),
-        null
-    );
+    let quad = new THREE.Mesh( new THREE.PlaneGeometry(resolution.x, resolution.y), null);
     scene.add(quad);
-
-    let controlState = new THREE.Camera();
-    controlState.position.set(0,0,0);
-    controlState.quaternion.set(0,0,0,1);
-    scene.add(controlState);
-
-
     let camera = new THREE.OrthographicCamera(-resolution.x / 2.0, resolution.x / 2.0, resolution.y / 2.0, -resolution.y / 2.0, 1, 1000);
     camera.position.set(0, 0, 10);
 
-    // Run every shader once to check for compile errors
-    let compileTimeStart = performance.now();
-    let failed=0;
-    for (let include of commonIncludes) {
-        currentShader = {
-            Name: include.Name,
-            File: include.File,
-            // add two for version and precision lines
-            LineOffset: 27 + 2
-        };
-        // Test Compile Included Files
-        // bail if there is an error found in the include script
-        if(compileFragShader(gl, document.getElementById(include.Name).textContent) == false) {
-            throw Error(`Failed to compile ${include.Name}`);
-        }
-    }
-
+    // --- Compile Check ---
     for (let buffer of buffers) {
-        currentShader = {
-            Name: buffer.Name,
-            File: buffer.File,
-            LineOffset: buffer.LineOffset
-        };
+        currentShader = { Name: buffer.Name, File: buffer.File, LineOffset: buffer.LineOffset };
         quad.material = buffer.Shader;
         renderer.setRenderTarget(buffer.Target);
         renderer.render(scene, camera);
     }
     currentShader = {};
-    let compileTimeEnd = performance.now();
-    let compileTime = compileTimeEnd - compileTimeStart;
+    
+    // --- Stable Orbit Physics (Ported from GLSL) ---
 
+    function getAllInitialStates() {
+        return [
+            // 0: Figure-8
+            {
+                p: [new THREE.Vector2(-1, 0), new THREE.Vector2(1, 0), new THREE.Vector2(0, 0)],
+                v: [new THREE.Vector2(0.347111, 0.532728), new THREE.Vector2(0.347111, 0.532728), new THREE.Vector2(-0.694222, -1.065456)],
+                scale: 0.3, shift: new THREE.Vector2(0,0)
+            },
+            // 1
+            {
+                p: [new THREE.Vector2(0.284319, 0), new THREE.Vector2(0.873609, 0), new THREE.Vector2(-1.157929, 0)],
+                v: [new THREE.Vector2(0, 1.377417), new THREE.Vector2(0, -0.488422), new THREE.Vector2(0, -0.888995)],
+                scale: 0.3, shift: new THREE.Vector2(0,0)
+            },
+            // 2
+            {
+                p: [new THREE.Vector2(0.013260, 0), new THREE.Vector2(1.415728, 0), new THREE.Vector2(-1.428989, 0)],
+                v: [new THREE.Vector2(0, 1.054151), new THREE.Vector2(0, -0.210146), new THREE.Vector2(0, -0.844005)],
+                scale: 0.3, shift: new THREE.Vector2(0,0)
+            },
+            // 3
+            {
+                p: [new THREE.Vector2(0.873304, 0), new THREE.Vector2(-0.625403, 0), new THREE.Vector2(-0.247901, 0)],
+                v: [new THREE.Vector2(0, 1.010776), new THREE.Vector2(0, -1.683353), new THREE.Vector2(0, 0.672576)],
+                scale: 0.3, shift: new THREE.Vector2(0,0)
+            },
+            // 4: Butterfly I
+            {
+                p: [new THREE.Vector2(0.666163, -0.081921), new THREE.Vector2(-0.025192, 0.454448), new THREE.Vector2(-0.103013, -0.765806)],
+                v: [new THREE.Vector2(0.841202, 0.029746), new THREE.Vector2(0.142642, -0.492315), new THREE.Vector2(-0.983845, 0.462569)],
+                scale: 0.3, shift: new THREE.Vector2(-0.15, 0.1)
+            },
+            // 5: Butterfly II
+            {
+                p: [new THREE.Vector2(0.486657, 0.755041), new THREE.Vector2(-0.681737, 0.293660), new THREE.Vector2(-0.022596, -0.612645)],
+                v: [new THREE.Vector2(-0.182709, 0.363013), new THREE.Vector2(-0.579074, -0.748157), new THREE.Vector2(0.761784, 0.385144)],
+                scale: 0.3, shift: new THREE.Vector2(0.1, -0.1)
+            }
+        ];
+    }
+    
+    function initStableOrbitState() {
+        const allOrbits = getAllInitialStates();
+        const randomIndex = Math.floor(Math.random() * allOrbits.length);
+        selectedOrbit = allOrbits[randomIndex];
+
+        position1.copy(selectedOrbit.p[0]);
+        position2.copy(selectedOrbit.p[1]);
+        position3.copy(selectedOrbit.p[2]);
+
+        velocity1.copy(selectedOrbit.v[0]);
+        velocity2.copy(selectedOrbit.v[1]);
+        velocity3.copy(selectedOrbit.v[2]);
+    }
+    
+    function accel(pi, pj) {
+        let r = pj.clone().sub(pi);
+        let k = r.dot(r); // k is distance squared
+        if (k < 1e-6) return new THREE.Vector2(0, 0); // Avoid division by zero
+        let invDist3 = 1.0 / Math.sqrt(k * k * k);
+        return r.multiplyScalar(G * invDist3);
+    }
+
+    function computeAccelerations(p) {
+        let a = [new THREE.Vector2(), new THREE.Vector2(), new THREE.Vector2()];
+        a[0] = accel(p[0], p[1]).add(accel(p[0], p[2]));
+        a[1] = accel(p[1], p[0]).add(accel(p[1], p[2]));
+        a[2] = accel(p[2], p[0]).add(accel(p[2], p[1]));
+        return a;
+    }
+
+    function rungeKutta4Step(p, v, dt) {
+        // k1
+        const k1v = computeAccelerations(p);
+        const k1p = v;
+
+        // k2
+        let p2 = [
+            p[0].clone().add(k1p[0].clone().multiplyScalar(0.5 * dt)),
+            p[1].clone().add(k1p[1].clone().multiplyScalar(0.5 * dt)),
+            p[2].clone().add(k1p[2].clone().multiplyScalar(0.5 * dt))
+        ];
+        let v2 = [
+            v[0].clone().add(k1v[0].clone().multiplyScalar(0.5 * dt)),
+            v[1].clone().add(k1v[1].clone().multiplyScalar(0.5 * dt)),
+            v[2].clone().add(k1v[2].clone().multiplyScalar(0.5 * dt))
+        ];
+        const k2v = computeAccelerations(p2);
+        const k2p = v2;
+
+        // k3
+        let p3 = [
+            p[0].clone().add(k2p[0].clone().multiplyScalar(0.5 * dt)),
+            p[1].clone().add(k2p[1].clone().multiplyScalar(0.5 * dt)),
+            p[2].clone().add(k2p[2].clone().multiplyScalar(0.5 * dt))
+        ];
+        let v3 = [
+            v[0].clone().add(k2v[0].clone().multiplyScalar(0.5 * dt)),
+            v[1].clone().add(k2v[1].clone().multiplyScalar(0.5 * dt)),
+            v[2].clone().add(k2v[2].clone().multiplyScalar(0.5 * dt))
+        ];
+        const k3v = computeAccelerations(p3);
+        const k3p = v3;
+
+        // k4
+        let p4 = [
+            p[0].clone().add(k3p[0].clone().multiplyScalar(dt)),
+            p[1].clone().add(k3p[1].clone().multiplyScalar(dt)),
+            p[2].clone().add(k3p[2].clone().multiplyScalar(dt))
+        ];
+        let v4 = [
+            v[0].clone().add(k3v[0].clone().multiplyScalar(dt)),
+            v[1].clone().add(k3v[1].clone().multiplyScalar(dt)),
+            v[2].clone().add(k3v[2].clone().multiplyScalar(dt))
+        ];
+        const k4v = computeAccelerations(p4);
+        const k4p = v4;
+
+        // Update positions and velocities
+        for (let i = 0; i < 3; i++) {
+            const dp = k1p[i].clone().add(k2p[i].clone().multiplyScalar(2)).add(k3p[i].clone().multiplyScalar(2)).add(k4p[i]).multiplyScalar(dt / 6.0);
+            const dv = k1v[i].clone().add(k2v[i].clone().multiplyScalar(2)).add(k3v[i].clone().multiplyScalar(2)).add(k4v[i]).multiplyScalar(dt / 6.0);
+            p[i].add(dp);
+            v[i].add(dv);
+        }
+    }
+    
+    // --- Initial Setup ---
+    initStableOrbitState();
     computeSize();
     fractalTooltipElement = document.getElementById('fractal_tooltip');
     render();
 
-    function addLineNumbers( string ) {
-        let lines = string.split( '\\n' );
-        for ( let i = 0; i < lines.length; i ++ ) {
-            lines[ i ] = ( i + 1 ) + ': ' + lines[ i ];
-        }
-        return lines.join( '\\n' );
-    }
 
-    function compileFragShader(gl, fsSource) {
-        const fs = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(fs, fsSource);
-        gl.compileShader(fs);
-        if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
-            const fragmentLog = gl.getShaderInfoLog(fs);
-            console.error( 'THREE.WebGLProgram: shader error: ', gl.getError(), 'gl.COMPILE_STATUS', null, null, null, null, fragmentLog );
-            return false;
-        }
-        return true;
-    }
-
-function calculateGravitationalForce(p_i, p_j, m_i, m_j, G, minSq) {
-    let vec_ij = new THREE.Vector2().subVectors(p_j, p_i);
-    let distSq_ij = vec_ij.lengthSq();
-    if (distSq_ij > minSq) {
-        let forceMag_ij = G * m_i * m_j / distSq_ij;
-        return vec_ij.normalize().multiplyScalar(forceMag_ij); // Force on i by j
-    }
-    return new THREE.Vector2(0,0);
-}
     function render() {
         requestAnimationFrame(render);
         deltaTime = clock.getDelta();
         time = startingTime + clock.getElapsedTime();
-
-        if (vscode !== undefined) {
-            vscode.postMessage({ command: 'updateTime', time: time });
-        }
         updateDate();
 
         // --- Mouse Position in World Space ---
         let mouseWorldX = (mouse.x / resolution.x - 0.5) * 2.0 * (resolution.x / resolution.y);
-        let mouseWorldY = (mouse.y / resolution.y - 0.5) * 2.0; // Y is now -1 to 1
+        let mouseWorldY = (mouse.y / resolution.y - 0.5) * 2.0;
         let mouseWorldPos = new THREE.Vector2(mouseWorldX, mouseWorldY);
 
+        // --- Center of Mass (CoM) Mouse Gravity ---
+        let oldOrbitSystemCenter = orbitSystemCenter.clone();
+        let forceToMouse = new THREE.Vector2(0,0);
+        if (mouseButton.x === 1) { // If left mouse is held down
+            forceToMouse.subVectors(mouseWorldPos, orbitSystemCenter).multiplyScalar(orbitParams.mouseGravityStrength);
+        }
+        let dampingForce = orbitSystemVelocity.clone().multiplyScalar(-orbitParams.damping);
+        let netAccelerationCoM = forceToMouse.add(dampingForce);
+
+        orbitSystemVelocity.add(netAccelerationCoM.multiplyScalar(deltaTime));
+        orbitSystemCenter.add(orbitSystemVelocity.clone().multiplyScalar(deltaTime));
+        let deltaCoM = new THREE.Vector2().subVectors(orbitSystemCenter, oldOrbitSystemCenter);
+
+        // --- Fixed-Step Physics Update for the internal orbit ---
+        physicsTimeAccumulator += deltaTime;
+        while (physicsTimeAccumulator >= physicsTimeStep) {
+            let positions = [position1, position2, position3];
+            let velocities = [velocity1, velocity2, velocity3];
+            rungeKutta4Step(positions, velocities, physicsTimeStep);
+            physicsTimeAccumulator -= physicsTimeStep;
+        }
+
+        // Apply the CoM translation to each body
+        position1.add(deltaCoM);
+        position2.add(deltaCoM);
+        position3.add(deltaCoM);
+
+        // --- Create Scaled Positions for Visuals ---
+        let p1_display = position1.clone().multiplyScalar(selectedOrbit.scale).add(selectedOrbit.shift);
+        let p2_display = position2.clone().multiplyScalar(selectedOrbit.scale).add(selectedOrbit.shift);
+        let p3_display = position3.clone().multiplyScalar(selectedOrbit.scale).add(selectedOrbit.shift);
+        
         // --- Tooltip Logic ---
         if (fractalTooltipElement) {
-            const hoverThreshold = 0.1; // Same as clickThreshold for consistency
-            let distMouseTo1 = mouseWorldPos.distanceTo(position1);
-            let distMouseTo2 = mouseWorldPos.distanceTo(position2);
-            let distMouseTo3 = mouseWorldPos.distanceTo(position3);
-
+            const hoverThreshold = 0.1; 
+            let distMouseTo1 = mouseWorldPos.distanceTo(p1_display);
+            let distMouseTo2 = mouseWorldPos.distanceTo(p2_display);
+            let distMouseTo3 = mouseWorldPos.distanceTo(p3_display);
             let hoveredFractalName = null;
 
-            if (distMouseTo1 < hoverThreshold) {
-                hoveredFractalName = shaderParams1.linkName;
-            } else if (distMouseTo2 < hoverThreshold) {
-                hoveredFractalName = shaderParams2.linkName;
-            } else if (distMouseTo3 < hoverThreshold) {
-                hoveredFractalName = shaderParams3.linkName;
-            }
-
+            if (distMouseTo1 < hoverThreshold) hoveredFractalName = shaderParams1.linkName;
+            else if (distMouseTo2 < hoverThreshold) hoveredFractalName = shaderParams2.linkName;
+            else if (distMouseTo3 < hoverThreshold) hoveredFractalName = shaderParams3.linkName;
+            
             if (hoveredFractalName) {
                 fractalTooltipElement.innerHTML = hoveredFractalName;
                 fractalTooltipElement.style.display = 'block';
-                // Position tooltip slightly below and to the right of the mouse cursor
-                // mouse.x and mouse.y are screen pixel coordinates
-                fractalTooltipElement.style.left = (mouse.x - (fractalTooltipElement.offsetWidth / 2)) + 'px'; // Centered horizontally
-                fractalTooltipElement.style.top = (resolution.y - mouse.y + 15) + 'px'; // Flipped vertical, 15px offset
-                console.log(`Mouse: X=${mouse.x}, Y=${mouse.y} | Tooltip: Left=${fractalTooltipElement.style.left}, Top=${fractalTooltipElement.style.top}`);
+                fractalTooltipElement.style.left = (mouse.x - (fractalTooltipElement.offsetWidth / 2)) + 'px';
+                fractalTooltipElement.style.top = (resolution.y - mouse.y + 15) + 'px';
             } else {
                 fractalTooltipElement.style.display = 'none';
             }
         }
-
-        // --- Center of Mass (CoM) Physics (Gravitational Pull to Mouse on Click) ---
-        let oldOrbitSystemCenter = orbitSystemCenter.clone();
-
-        let forceToMouse = new THREE.Vector2(0,0);
-        if (mouseButton.x === 1) {
-            forceToMouse.subVectors(mouseWorldPos, orbitSystemCenter);
-            let distanceToMouseSq = forceToMouse.lengthSq();
-            if (distanceToMouseSq > 0.000001) {
-                forceToMouse.normalize().multiplyScalar(orbitParams.mouseGravityStrength);
-            } else {
-                forceToMouse.set(0,0);
-            }
-        }
         
-        // Spring-like force towards mouse
-        let springForce = forceToMouse; // forceToMouse is already scaled by mouseGravityStrength
-
-        // Damping force opposing current velocity
-        let dampingForce = new THREE.Vector2().copy(orbitSystemVelocity).multiplyScalar(-orbitParams.damping);
-        // Note: orbitParams.damping might need significant retuning.
-        // A higher value (e.g., 0.5 to 5.0 or more) might be needed for critical damping.
-
-        // Net acceleration
-        let netAccelerationCoM = new THREE.Vector2().add(springForce).add(dampingForce);
-
-        // Update velocity and position
-        orbitSystemVelocity.add(netAccelerationCoM.multiplyScalar(deltaTime));
-        orbitSystemCenter.add(new THREE.Vector2().copy(orbitSystemVelocity).multiplyScalar(deltaTime));
-
-        let deltaCoM = new THREE.Vector2().subVectors(orbitSystemCenter, oldOrbitSystemCenter);
-
-        // --- Internal N-Body Gravitational Physics ---
-        let minSafeDistSq = 0.0000001; // Decreased for closer collapse
-
-        let force_2on1 = calculateGravitationalForce(position1, position2, orbitParams.mass1, orbitParams.mass2, orbitParams.G, minSafeDistSq);
-        let force_3on1 = calculateGravitationalForce(position1, position3, orbitParams.mass1, orbitParams.mass3, orbitParams.G, minSafeDistSq);
+        // --- Update Uniforms and Render Passes ---
         
-        let force_1on2 = force_2on1.clone().negate();
-        let force_3on2 = calculateGravitationalForce(position2, position3, orbitParams.mass2, orbitParams.mass3, orbitParams.G, minSafeDistSq);
-
-        let force_1on3 = force_3on1.clone().negate();
-        let force_2on3 = force_3on2.clone().negate();
-
-        let netForceOn1 = new THREE.Vector2().add(force_2on1).add(force_3on1);
-        let netForceOn2 = new THREE.Vector2().add(force_1on2).add(force_3on2);
-        let netForceOn3 = new THREE.Vector2().add(force_1on3).add(force_2on3);
-
-        velocity1.add(new THREE.Vector2().copy(netForceOn1).multiplyScalar(deltaTime / orbitParams.mass1));
-        velocity2.add(new THREE.Vector2().copy(netForceOn2).multiplyScalar(deltaTime / orbitParams.mass2));
-        velocity3.add(new THREE.Vector2().copy(netForceOn3).multiplyScalar(deltaTime / orbitParams.mass3));
-
-        // --- Update Positions and Perform Boundary Checks ---
-        const aspectRatio = resolution.x / resolution.y;
-        const xBoundary = aspectRatio;
-        const yBoundary = 1.0;
-        const restitution = 1.0; // Perfect bounce
-
-        const currentPositions = [position1, position2, position3]; // These are the actual THREE.Vector2 objects
-        const velocities = [velocity1, velocity2, velocity3];
-
-        for (let i = 0; i < 3; i++) {
-            let p = currentPositions[i]; // Direct reference to position1, position2, or position3
-            let v = velocities[i];
-
-            // 1. Calculate position after its own velocity update
-            let posAfterVelocity = p.clone().add(new THREE.Vector2().copy(v).multiplyScalar(deltaTime));
-
-            // 2. Apply boundary checks and bounces based on posAfterVelocity (reflects velocity)
-            // X-axis bounce
-            if (posAfterVelocity.x > xBoundary) {
-                posAfterVelocity.x = xBoundary;
-                v.x = -Math.abs(v.x) * restitution;
-            } else if (posAfterVelocity.x < -xBoundary) {
-                posAfterVelocity.x = -xBoundary;
-                v.x = Math.abs(v.x) * restitution;
-            }
-
-            // Y-axis bounce
-            if (posAfterVelocity.y > yBoundary) {
-                posAfterVelocity.y = yBoundary;
-                v.y = -Math.abs(v.y) * restitution;
-            } else if (posAfterVelocity.y < -yBoundary) {
-                posAfterVelocity.y = -yBoundary;
-                v.y = Math.abs(v.y) * restitution;
-            }
-
-            // 3. Now, apply the CoM shift to this (potentially bounced) position
-            let finalPosition = posAfterVelocity.add(deltaCoM);
-
-            // 4. Final clamping: Ensure the CoM shift doesn't push it out of bounds.
-            //    No further velocity reversal here, as the "bounce" was for its own motion.
-            if (finalPosition.x > xBoundary) finalPosition.x = xBoundary;
-            if (finalPosition.x < -xBoundary) finalPosition.x = -xBoundary;
-            if (finalPosition.y > yBoundary) finalPosition.y = yBoundary;
-            if (finalPosition.y < -yBoundary) finalPosition.y = -yBoundary;
-
-            // Update the actual position vector for the fractal
-            p.copy(finalPosition);
-        }
-
-        // Update uniforms for Fractal 1 (buffers[0])
+        // Render Fractal 1
         let uniforms1 = buffers[0].Shader.uniforms;
-        uniforms1['iResolution'].value.copy(resolution);
-        uniforms1['iTimeDelta'].value = deltaTime;
         uniforms1['iTime'].value = time;
         uniforms1['iFrame'].value = frameCounter;
-        uniforms1['iMouse'].value.copy(mouse);
-        uniforms1['iMouseButton'].value.copy(mouseButton);
-        uniforms1['iDate'].value.copy(date);
         uniforms1['u_timeAnimationSpeed'].value = shaderParams1.timeAnimationSpeed;
         uniforms1['u_patternFrequency'].value = shaderParams1.patternFrequency;
         uniforms1['u_detailTimeFactor'].value = shaderParams1.detailTimeFactor;
         uniforms1['u_paletteTimeFactor'].value = shaderParams1.paletteTimeFactor;
-        uniforms1['u_visualFractalCenter'].value.copy(position1);
+        uniforms1['u_visualFractalCenter'].value.copy(p1_display);
         
         quad.material = buffers[0].Shader;
         renderer.setRenderTarget(buffers[0].Target);
         renderer.render(scene, camera);
 
-        // --- Uniform Update for Instance 2 (buffers[1]) ---
-        // position2 is already updated by the N-body physics
+        // Render Fractal 2
         let uniforms2 = buffers[1].Shader.uniforms;
-        uniforms2['iResolution'].value.copy(resolution);
-        uniforms2['iTimeDelta'].value = deltaTime;
         uniforms2['iTime'].value = time;
         uniforms2['iFrame'].value = frameCounter;
-        uniforms2['iMouse'].value.copy(mouse);
-        uniforms2['iMouseButton'].value.copy(mouseButton);
-        uniforms2['iDate'].value.copy(date);
         uniforms2['u_timeAnimationSpeed'].value = shaderParams2.timeAnimationSpeed;
         uniforms2['u_patternFrequency'].value = shaderParams2.patternFrequency;
         uniforms2['u_detailTimeFactor'].value = shaderParams2.detailTimeFactor;
         uniforms2['u_paletteTimeFactor'].value = shaderParams2.paletteTimeFactor;
-        uniforms2['u_visualFractalCenter'].value.copy(position2);
+        uniforms2['u_visualFractalCenter'].value.copy(p2_display);
 
         quad.material = buffers[1].Shader;
         renderer.setRenderTarget(buffers[1].Target);
         renderer.render(scene, camera);
 
-        // --- Uniform Update for Instance 3 (buffers[2]) ---
-        // position3 is already updated by the N-body physics
+        // Render Fractal 3
         let uniforms3 = buffers[2].Shader.uniforms;
-        uniforms3['iResolution'].value.copy(resolution);
-        uniforms3['iTimeDelta'].value = deltaTime;
         uniforms3['iTime'].value = time;
         uniforms3['iFrame'].value = frameCounter;
-        uniforms3['iMouse'].value.copy(mouse);
-        uniforms3['iMouseButton'].value.copy(mouseButton);
-        uniforms3['iDate'].value.copy(date);
         uniforms3['u_timeAnimationSpeed'].value = shaderParams3.timeAnimationSpeed;
         uniforms3['u_patternFrequency'].value = shaderParams3.patternFrequency;
         uniforms3['u_detailTimeFactor'].value = shaderParams3.detailTimeFactor;
         uniforms3['u_paletteTimeFactor'].value = shaderParams3.paletteTimeFactor;
-        uniforms3['u_visualFractalCenter'].value.copy(position3);
+        uniforms3['u_visualFractalCenter'].value.copy(p3_display);
         
         quad.material = buffers[2].Shader;
         renderer.setRenderTarget(buffers[2].Target);
         renderer.render(scene, camera);
-
-        // --- Compositing Pass (buffers[3]) ---
-        let compositeUniforms = buffers[3].Shader.uniforms; // Adjusted buffer index
-        compositeUniforms['iResolution'].value.copy(resolution);
-        compositeUniforms['tDiffuse1'].value = renderTarget1.texture;
-        compositeUniforms['tDiffuse2'].value = renderTarget2.texture;
-        compositeUniforms['tDiffuse3'].value = renderTarget3.texture; // Assign third texture
-
-        quad.material = buffers[3].Shader; // Adjusted buffer index
+        
+        // Compositing Pass
+        quad.material = buffers[3].Shader; 
         renderer.setRenderTarget(null);
         renderer.render(scene, camera);
 
-
-        if (mouse.w > 0.0) {
-            mouse.w = -mouse.w;
-            updateMouse();
-        }
-
-        for (let buffer of buffers) {
-            if (buffer.PingPongTarget) {
-                [buffer.PingPongTarget, buffer.Target] = [buffer.Target, buffer.PingPongTarget];
-                buffer.Shader.uniforms[`iChannel${buffer.PingPongChannel}`].value = buffer.PingPongTarget.texture;
-                for (let dependent of buffer.Dependents) {
-                    const dependentBuffer = buffers[dependent.Index];
-                    dependentBuffer.Shader.uniforms[`iChannel${dependent.Channel}`].value = buffer.Target.texture;
-                }
-            }
-        }
-
         frameCounter++;
     }
-    function forceAspectRatio(width, height) {
-        // Forced aspect ratio
-        let forcedAspects = [0,0];
-        let forcedAspectRatio = forcedAspects[0] / forcedAspects[1];
-        let aspectRatio = width / height;
 
-        if (forcedAspectRatio <= 0 || !isFinite(forcedAspectRatio)) {
-            let resolution = new THREE.Vector3(width, height, 1.0);
-            return resolution;
-        }
-        else if (aspectRatio < forcedAspectRatio) {
-            let resolution = new THREE.Vector3(width, Math.floor(width / forcedAspectRatio), 1);
-            return resolution;
-        }
-        else {
-            let resolution = new THREE.Vector3(Math.floor(height * forcedAspectRatio), height, 1);
-            return resolution;
-        }
+    function forceAspectRatio(width, height) {
+        return new THREE.Vector3(width, height, 1.0);
     }
+    
     function computeSize() {
-        
-        // Compute forced aspect ratio and align canvas
         resolution = forceAspectRatio(window.innerWidth, window.innerHeight);
         canvas.style.left = `${(window.innerWidth - resolution.x) / 2}px`;
         canvas.style.top = `${(window.innerHeight - resolution.y) / 2}px`;
 
         for (let buffer of buffers) {
-            if (buffer.Target) {
-                buffer.Target.setSize(resolution.x, resolution.y);
-            }
-            if (buffer.PingPongTarget) {
-                buffer.PingPongTarget.setSize(resolution.x, resolution.y);
-            }
+            if (buffer.Target) buffer.Target.setSize(resolution.x, resolution.y);
         }
         renderer.setSize(resolution.x, resolution.y, false);
         
-        // Update Camera and Mesh
         quad.geometry = new THREE.PlaneGeometry(resolution.x, resolution.y);
         camera.left = -resolution.x / 2.0;
         camera.right = resolution.x / 2.0;
@@ -876,101 +740,55 @@ function calculateGravitationalForce(p_i, p_j, m_i, m_j, G, minSq) {
         camera.bottom = -resolution.y / 2.0;
         camera.updateProjectionMatrix();
 
-        // Reset iFrame on resize for shaders that rely on first-frame setups
         frameCounter = 0;
     }
-    function updateMouse() {
-        if (vscode !== undefined) {
-            vscode.postMessage({
-                command: 'updateMouse',
-                mouse: {
-                    x: mouse.x,
-                    y: mouse.y,
-                    z: mouse.z,
-                    w: mouse.w
-                },
-                normalizedMouse: {
-                    x: normalizedMouse.x,
-                    y: normalizedMouse.y
-                }
-            });
-        }
-    }
-    let dragging = false;
+    
     function updateNormalizedMouseCoordinates(clientX, clientY) {
         let rect = canvas.getBoundingClientRect();
-        let mouseX = clientX - rect.left;
-        let mouseY = resolution.y - clientY - rect.top;
-
-        // Always update mouse.x and mouse.y on mousemove for hover effects
-        mouse.x = mouseX;
-        mouse.y = mouseY;
-
-        normalizedMouse.x = mouseX / resolution.x;
-        normalizedMouse.y = mouseY / resolution.y;
+        mouse.x = clientX - rect.left;
+        mouse.y = resolution.y - (clientY - rect.top); // Flipped Y
     }
+
     canvas.addEventListener('mousemove', function(evt) {
         updateNormalizedMouseCoordinates(evt.clientX, evt.clientY);
-        updateMouse();
     }, false);
+
     canvas.addEventListener('mousedown', function(evt) {
         if (evt.button == 0) { // Left click
-            // Recalculate mouseWorldPos for click detection
-            // This assumes 'mouse' and 'resolution' globals are up-to-date from mousemove
             let clickMouseWorldX = (mouse.x / resolution.x - 0.5) * 2.0 * (resolution.x / resolution.y);
             let clickMouseWorldY = (mouse.y / resolution.y - 0.5) * 2.0;
             let clickMouseWorldPos = new THREE.Vector2(clickMouseWorldX, clickMouseWorldY);
 
-            const clickThreshold = 0.1; // How close mouse needs to be to fractal center
+            let p1_display = position1.clone().multiplyScalar(selectedOrbit.scale).add(selectedOrbit.shift);
+            let p2_display = position2.clone().multiplyScalar(selectedOrbit.scale).add(selectedOrbit.shift);
+            let p3_display = position3.clone().multiplyScalar(selectedOrbit.scale).add(selectedOrbit.shift);
 
-            let distClickTo1 = clickMouseWorldPos.distanceTo(position1);
-            let distClickTo2 = clickMouseWorldPos.distanceTo(position2);
-            let distClickTo3 = clickMouseWorldPos.distanceTo(position3);
-
+            const clickThreshold = 0.1;
             let linkClicked = false;
-            if (distClickTo1 < clickThreshold) {
+            
+            if (clickMouseWorldPos.distanceTo(p1_display) < clickThreshold) {
                 window.open(shaderParams1.linkURL, '_blank');
                 linkClicked = true;
-            } else if (distClickTo2 < clickThreshold) {
+            } else if (clickMouseWorldPos.distanceTo(p2_display) < clickThreshold) {
                 window.open(shaderParams2.linkURL, '_blank');
                 linkClicked = true;
-            } else if (distClickTo3 < clickThreshold) {
-                // shaderParams3 gets its linkURL from shaderParams2 via cloning
+            } else if (clickMouseWorldPos.distanceTo(p3_display) < clickThreshold) {
                 window.open(shaderParams3.linkURL, '_blank');
                 linkClicked = true;
             }
 
             if (!linkClicked) {
-                mouseButton.x = 1; // Proceed with CoM interaction if no link was clicked
+                mouseButton.x = 1; // Engage mouse gravity only if a link wasn't clicked
             }
-            // If a link was clicked, we don't set mouseButton.x = 1, so CoM won't activate from this click.
         }
-        if (evt.button == 2)
-            mouseButton.y = 1;
-
-        if (!dragging) {
-            updateNormalizedMouseCoordinates(evt.clientX, evt.clientY);
-            mouse.z = mouse.x;
-            mouse.w = mouse.y;
-            dragging = true
-        }
-
-        updateMouse();
     }, false);
+
     canvas.addEventListener('mouseup', function(evt) {
-        if (evt.button == 0)
-            mouseButton.x = 0;
-        if (evt.button == 2)
-            mouseButton.y = 0;
-
-        dragging = false;
-        mouse.z = -mouse.z;
-        mouse.w = -mouse.w;
-
-        updateMouse();
+        if (evt.button == 0) {
+            mouseButton.x = 0; // Disengage mouse gravity
+        }
     }, false);
-    window.addEventListener('resize', function() {
-        computeSize();
-    });
+
+    window.addEventListener('resize', computeSize);
 
 </script>

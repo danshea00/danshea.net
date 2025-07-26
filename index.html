@@ -1,4 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dan Shea</title>
+    <meta name="description" content="Dan Shea Personal Website">
+    <meta name="keywords" content="Dan Shea, personal website, projects, links, shaders, three body problem, WebGL, operating systems, software, engineer, seL4, UNSW, Arista">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://danshea.net/">
+    <meta property="og:title" content="Dan Shea">
+    <meta property="og:description" content="Dan Shea Personal Website">
+    <!-- <meta property="og:image" content="https://danshea.net/preview.jpg"> -->
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://danshea.net/">
+    <meta property="twitter:title" content="Dan Shea">
+    <meta property="twitter:description" content="Dan Shea Personal Website">
+    <!-- <meta property="twitter:image" content="https://danshea.net/preview.jpg"> -->
+
     <style>
         html, body {
             margin: 0;
@@ -45,7 +67,7 @@
             position: absolute;
         }
 
-#dat_gui_container {
+        #dat_gui_container {
             position: absolute;
             left: 0px;
             display: none; /* Initially hidden */
@@ -66,15 +88,42 @@
             pointer-events: none; /* So it doesn't interfere with mouse events on canvas */
             white-space: nowrap;
         }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border-width: 0;
+        }
     </style>
 </head>
 <body>
-    <div id="message"></div>
-    <div id="container">
+    <main>
+        <div id="message"></div>
+        <div id="container">
+        </div>
+        <div id="dat_gui_container"></div>
+        <div id="fractal_tooltip"></div>
+    </main>
+    <div class="sr-only">
+        <h1>Dan Shea</h1>
+        <p>Dan Shea Personal Website</p>
+        <nav>
+            <h2</h2>
+            <ul>
+                <li><a href="https://github.com/danshea00">GitHub</a></li>
+                <li><a href="https://linkedin.com/in/danshea00">LinkedIn</a></li>
+                <li><a href="conway/index.html">Conway's Game of Life</a></li>
+            </ul>
+        </nav>
     </div>
-<div id="dat_gui_container"></div>
-<div id="fractal_tooltip"></div>
 </body>
+</html>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/110/three.min.js"></script>

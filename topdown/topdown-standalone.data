@@ -1,0 +1,828 @@
+#version 330
+precision mediump float;
+
+uniform sampler2D texture0;
+
+// Removed: uniform vec3 lightColour; 
+
+uniform vec3 sunPos;          // normalised direction of the ACTIVE light — the sun by
+                              // day, the full moon (opposite azimuth) by night
+uniform float shadowStrength; // cast-shadow darkening of the active light (DayCycle.h);
+                              // fades to ~0 at the sun↔moon handover ⇒ march skipped
+uniform vec3 pix;
+uniform float time; // This is now "scaledTime" from C++
+uniform vec2 chunkWorldPos;
+
+const int STEPS = 200;
+const float rayIntensity = .8;
+const float normalIntensity = 0.8;
+
+// Terrain colours
+const vec3 colourDeepWater = vec3(0.0,0.2,0.5);
+const vec3 colourWater = vec3(0.2,0.4,0.7);
+const vec3 colourSand = vec3(0.839,0.714,0.62);
+const vec3 colourGrass = vec3(0.596,0.678,0.353);
+const vec3 colourBush = vec3(0.396,0.522,0.255);
+const vec3 colourForest = vec3(0.278,0.463,0.271);
+const vec3 colourStone = vec3(0.427,0.463,0.529);
+const vec3 colourSnow = vec3(0.824,0.878,0.871);
+const vec3 colourWood  = vec3(0.55, 0.27, 0.07);  // Wood brown
+const vec3 colourBrick = vec3(0.70, 0.35, 0.20);  // Fired brick red
+const vec3 colourThatch = vec3(0.78, 0.70, 0.35); // Straw/thatch yellow
+const vec3 colourDirt  = vec3(0.50, 0.35, 0.20);  // Packed dirt
+const vec3 colourLeaves = vec3(0.18, 0.44, 0.17); // Tree foliage
+
+const vec3 COLOR_NIGHT = vec3(0.25, 0.3, 0.5); // Brighter "Moonlight"
+const vec3 COLOR_DAWN  = vec3(0.8, 0.5, 0.3);
+const vec3 COLOR_DAY   = vec3(1.0, 0.95, 0.9);
+
+in vec2 fragTexCoord;
+out vec4 colour;
+
+// ... [Keep noise, smoothNoise, fbm, getHeight, getNormal, getTerrainColour exactly as they were] ...
+
+float noise(vec2 co){
+    return fract(sin(dot(co, vec2(1.9898, 7.233))) * 43758.5453);
+}
+
+float smoothNoise(vec2 coord) {
+    vec2 i = floor(coord);
+    vec2 f = fract(coord);
+    float a = noise(i);
+    float b = noise(i + vec2(1.0, 0.0));
+    float c = noise(i + vec2(0.0, 1.0));
+    float d = noise(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+float fbm(vec2 coord) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    for (int i = 0; i < 4; i++) {
+        value += amplitude * smoothNoise(coord * frequency);
+        amplitude *= 0.5;
+        frequency *= 2.0;
+    }
+    return value;
+}
+
+float getHeight(vec2 fragTexCoord) {
+  return texture(texture0, fragTexCoord).g;
+}
+
+vec3 getNormal(vec2 pos) {
+  float h = 100.; 
+  float offset = min(pix.x, pix.y) * 0.5;
+  float l = h * getHeight(pos + vec2(-offset, 0.0));
+  float r = h * getHeight(pos + vec2(offset, 0.0));
+  float d = h * getHeight(pos + vec2(0.0, -offset));
+  float u = h * getHeight(pos + vec2(0.0, offset));
+  vec3 normal = normalize(vec3(l - r, d - u, 2.0)); 
+  return normal;
+}
+
+vec3 getTerrainColour(float h, float t, float m) {
+  float noisyHeight = h + noise(gl_FragCoord.xy * 0.1) * 0.01;
+  float noisyTemp = t + noise(gl_FragCoord.xy * 0.2 + 10.0) * 0.01;
+  float noisyMoisture = m + noise(gl_FragCoord.xy * 0.3 - 10.0) * 0.01;
+  
+  vec3 col;
+  if (noisyHeight > 0.9) {
+    col = colourSnow;
+  } else {
+    vec3 biome_low;
+    vec3 biome_mid;
+    vec3 biome_high;
+    
+    if (noisyTemp < 0.25) {
+        biome_low = colourGrass; biome_mid = colourStone; biome_high = colourStone;
+    } else if (noisyTemp > 0.6) {
+        if (noisyMoisture < 0.4) { biome_low = colourSand; biome_mid = colourSand; biome_high = colourStone; }
+        else { biome_low = colourGrass; biome_mid = colourBush; biome_high = colourForest; }
+    } else {
+        if (noisyMoisture < 0.4) { biome_low = colourGrass; biome_mid = colourGrass; biome_high = colourStone; } 
+        else { biome_low = colourGrass; biome_mid = colourBush; biome_high = colourForest; }
+    }
+    
+    if (noisyHeight < 0.4) {
+        float t_h = smoothstep(0.3, 0.4, noisyHeight);
+        col = mix(colourSand, biome_low, t_h);
+    } else if (noisyHeight < 0.55) {
+        float t_h = smoothstep(0.4, 0.55, noisyHeight);
+        col = mix(biome_low, biome_mid, t_h);
+    } else { 
+        float t_h = smoothstep(0.55, 0.7, noisyHeight);
+        col = mix(biome_mid, biome_high, t_h);
+    }
+  }
+  return col;
+}
+
+// Water is no longer a static altitude band painted over low terrain.  It is now a
+// SIMULATED quantity (see WaterSimulation) rendered as a separate overlay from the
+// per-tile water grid; the water pass lives in main() below.  colourDeepWater /
+// colourWater above are reused by that pass.
+
+// New helper to determine light colour based on time
+vec3 calculateLightColour() {
+    float dayCycle = sin(time); // -1.0 to 1.0
+
+    if (dayCycle < -0.2) {
+        return COLOR_NIGHT;
+    } else if (dayCycle < 0.2) {
+        // Transition Night -> Dawn/Dusk
+        float t = (dayCycle + 0.2) / 0.4;
+        return mix(COLOR_NIGHT, COLOR_DAWN, t);
+    } else if (dayCycle < 0.5) {
+        // Transition Dawn -> Day
+        float t = (dayCycle - 0.2) / 0.3;
+        return mix(COLOR_DAWN, COLOR_DAY, t);
+    } else {
+        return COLOR_DAY;
+    }
+}
+
+void main() {
+  const float borderU = 2.0 / 5.0;
+  const float borderV = 2.0 / 5.0;
+  const float centerEndU = 3.0 / 5.0;
+  const float centerEndV = 3.0 / 5.0;
+
+  if (fragTexCoord.x < borderU || fragTexCoord.y < borderV ||
+      fragTexCoord.x >= centerEndU || fragTexCoord.y >= centerEndV) {
+      discard;
+  }
+
+  vec2 fragCoord = floor(fragTexCoord * vec2(500)) / vec2(500);
+
+  vec4 rawData = texture(texture0, fragCoord);
+  vec3 terrainData = rawData.rgb;
+  float materialID = rawData.a * 255.0; // Convert back to 0-255 range approximately
+
+  float terrainHeight = terrainData.g;
+  float temperature = terrainData.r;
+  float moisture = terrainData.b;
+
+  vec3 op = vec3(fragCoord, terrainHeight);
+  vec3 p = op;
+
+  float minStepSize = min(pix.x, pix.y);
+
+  vec3 sunDir = sunPos;
+  vec3 stepDir = normalize(sunDir);
+
+  float inShadow = 0.;
+  int n = 0;
+
+  // Skip the march entirely while the active light sits at the horizon (sun↔moon
+  // handover) — its shadows would be invisible anyway.
+  if (shadowStrength > 0.005) {
+    for(int i = 1; i <= STEPS; i ++) {
+      n++;
+      float h = getHeight(p.xy);
+      if(h > p.z + minStepSize * 0.1) {
+        inShadow = 1.;
+        break;
+      }
+      if(p.z > 1.2) break;
+      float heightDiff = max(0.0, p.z - h);
+      float stepSize = max(minStepSize * 2.0, heightDiff * 0.1);
+      p += stepDir * stepSize;
+    }
+
+    if(n >= STEPS - 10) {
+      inShadow = mix(0.0, 1.0, float(n - (STEPS - 10)) / 10.0);
+    }
+  }
+
+  vec3 normal = getNormal(fragCoord);
+  float normalShadow = (dot(normal, -stepDir) + 1.)/2.;
+
+  float rayDist = length(op - p);
+  float distanceFalloff = 1.0 - smoothstep(0.0, 1.0, rayDist);
+  float softShadow = inShadow * shadowStrength * distanceFalloff;
+  float shadowIntensity = clamp(softShadow * rayIntensity + normalShadow * normalIntensity, 0.0, 0.8);
+  
+  float lightStrength = 1. - shadowIntensity;
+  
+  vec3 currentLightColour = calculateLightColour();
+  
+  vec3 light = clamp(currentLightColour * lightStrength, 0., 1.);
+
+  // Terrain albedo for every tile — low ground below the old water line is now just
+  // dry land (sand/dirt); simulated water is composited on top in the water pass.
+  vec3 baseColour;
+
+  // Material Overrides — IDs match MaterialID enum in Material.h
+  if (materialID > 210.0) {                          // 255 = Default terrain
+      baseColour = getTerrainColour(terrainHeight, temperature, moisture);
+  } else if (materialID > 195.0) {                   // 200 = Stone
+      baseColour = colourStone;
+  } else if (materialID > 145.0 && materialID < 155.0) { // 150 = Brick
+      baseColour = colourBrick;
+  } else if (materialID > 95.0 && materialID < 105.0) {  // 100 = Wood
+      baseColour = colourWood;
+  } else if (materialID > 70.0 && materialID < 80.0) {   // 75 = Thatch
+      baseColour = colourThatch;
+  } else if (materialID > 45.0 && materialID < 55.0) {   // 50 = Dirt
+      baseColour = colourDirt;
+  } else if (materialID > 55.0 && materialID < 65.0) {   // 60 = Trunk (tree centre)
+      baseColour = colourWood;
+  } else if (materialID > 20.0 && materialID < 30.0) {   // 25 = Leaves (trees)
+      baseColour = colourLeaves;
+  } else {
+      baseColour = getTerrainColour(terrainHeight, temperature, moisture);
+  }
+
+  colour = vec4(light * baseColour, 1.0);
+}#version 330
+
+// Combined heightmap: R=temperature G=altitude B=moisture A=materialID (all 0-1)
+uniform sampler2D texture0;
+
+// Simulated water depth, one texel per tile, same MAP_SIZE grid as texture0.
+// R channel = water units (WaterSimulation: WATER_PER_BLOCK = 8 units fill one cube
+// layer), 0 = dry.  Rebuilt every frame from the sparse water grid by IsoShaderRenderer.
+uniform sampler2D waterMap;
+
+// Camera / projection uniforms
+uniform vec2  camOffset;      // camera.offset (screen pixels, y increases downward)
+uniform vec2  camTile;        // camera.target / TILE_WIDTH (fractional tile coords)
+uniform float halfW;          // BASE_W * 0.5 * zoom  (screen px per half-tile width)
+uniform float halfH;          // BASE_H * 0.5 * zoom  (screen px per half-tile height)
+uniform float sideH;          // BASE_SIDE * zoom      (screen px per height level)
+uniform float waterAlt;       // 0.295
+uniform float screenH;        // GetScreenHeight() — LOGICAL pixels
+uniform float dpiScale;       // GetRenderHeight()/GetScreenHeight() (2.0 on Retina)
+
+// Combined-map uniforms
+uniform vec2  mapOriginTile;  // world tile coords of combined map (0,0) pixel
+uniform int   mapSize;        // 256
+
+// Lighting
+uniform vec3  sunDir;         // normalised direction of the ACTIVE light (world X=east
+                              // Y=north Z=up) — the sun by day, the full moon by night
+uniform float shadowStrength; // cast-shadow darkening of the active light (DayCycle.h);
+                              // fades to ~0 at the sun↔moon handover ⇒ march skipped
+
+// Animation
+uniform float time;           // seconds (GetTime) — drives water + star twinkle
+uniform float dayTime;        // scaled day-cycle time (GetTime * daySpeed) — same
+                              // phase as the C++ sun orbit; drives the dawn/dusk tint
+
+// Yaw rotation (Q/E): (cos θ, sin θ).  Identity = (1,0).
+uniform vec2  rotCS;
+
+// Normalised height of the tallest column currently in view (+ a small margin).  The
+// march starts here instead of u=1 so the band of empty sky above all terrain is
+// skipped — that keeps the fine, tile-sized step (below) from inflating the loop.
+uniform float uTop;
+
+out vec4 fragColor;
+
+// ────────────────────────── constants ──────────────────────────────────────────
+const float WATER_PER_BLOCK = 8.0;  // water sim units that fill one cube layer
+const float VIS_LEVELS = 128.0;  // VISUAL height levels — the visual height scale,
+                                 // decoupled from the C++ discretisation so the whole
+                                 // screen never collapses into one giant side-face.
+// Coarse march step sized in TILES, not in fixed u increments.  The ray advances
+// dh*VIS_LEVELS tiles horizontally per step, so to never skip an occluding column we
+// pick dh = STEP_TILES/VIS_LEVELS with STEP_TILES < 0.5.  (When STEP_TILES exceeded a
+// tile — e.g. STEPS=96 vs VIS_LEVELS=128 → 1.3 tiles/step — columns were skipped, and
+// which ones depended on the yaw phase: the "jagged at some angles" artefact.)
+const float STEP_TILES = 0.35;
+const int   MAX_STEPS  = 400;   // hard cap; the loop breaks early on a hit or at u=0
+
+// Palette — mirrors IsoRenderer.cpp and frag.fs
+const vec3 C_DEEP  = vec3(0.00, 0.20, 0.50);
+const vec3 C_WATER = vec3(0.20, 0.40, 0.70);
+const vec3 C_SAND  = vec3(0.839, 0.714, 0.620);
+const vec3 C_GRASS = vec3(0.596, 0.678, 0.353);
+const vec3 C_BUSH  = vec3(0.396, 0.522, 0.255);
+const vec3 C_FORES = vec3(0.278, 0.463, 0.271);
+const vec3 C_STONE = vec3(0.427, 0.463, 0.529);
+const vec3 C_SNOW  = vec3(0.824, 0.878, 0.871);
+const vec3 C_WOOD  = vec3(0.550, 0.270, 0.070);
+const vec3 C_LEAFY = vec3(0.180, 0.440, 0.170);
+const vec3 C_BRICK = vec3(0.700, 0.350, 0.200);
+const vec3 C_THACH = vec3(0.780, 0.700, 0.350);
+const vec3 C_DIRT  = vec3(0.500, 0.350, 0.200);
+
+// ── Trees ───────────────────────────────────────────────────────────────────────
+// A tree is ONE solid, OPAQUE heightfield mound (Leaves material).  The shader
+// two-tones each tree column by depth below its top: the upper CANOPY_DEPTH layers
+// are green foliage, anything lower is brown trunk/bark.  So the tallest part of the
+// mound shows a visible trunk under the canopy — no transparency, no floating cubes.
+const float CANOPY_DEPTH = 6.0;  // green-foliage thickness below a column's top (layers)
+
+// ────────────────────────── helpers ────────────────────────────────────────────
+
+// Sample the combined map at integer tile (tx, ty).
+// Returns vec4(temp, alt, mois, matID/255).  matID 0 is the VOID sentinel — it
+// never occurs on real tiles (natural terrain is Default=255): the combined map
+// is memset to zero where no chunk is loaded, and out-of-range sampling returns
+// the same all-zero pixel, so "no world data" is matID 0 everywhere.
+vec4 sampleTile(float tx, float ty) {
+    vec2 idx = floor(vec2(tx, ty)) - mapOriginTile;
+    if (idx.x < 0.0 || idx.x >= float(mapSize) ||
+        idx.y < 0.0 || idx.y >= float(mapSize))
+        return vec4(0.0, 0.0, 0.0, 0.0);  // out of range → void ⇒ space backdrop
+    // combined map is row-major, row 0 = northernmost tiles
+    // OpenGL v=0 ↔ image row 0 (they match when glTexImage2D is called with raw data)
+    vec2 uv = (idx + 0.5) / float(mapSize);
+    return texture(texture0, uv);
+}
+
+// Map a raw 0-1 altitude onto a normalised height in [0,1] with a FIXED,
+// camera-independent curve so a given tile is always the same height (the terrain
+// no longer rescales as you move).  A linear gain above the water line amplifies
+// the terrain's naturally narrow altitude band into visible relief; the soft knee
+// n/(1+n) compresses tall peaks gracefully, and the rescale by 1/knee(1.0) makes
+// alt=1.0 land exactly on 1.0 — so a max-height build uses all VIS_LEVELS layers.
+// HEIGHT_GAIN + rescale must stay in sync with IsoShaderRenderer (NORM_SCALE) and
+// raiseAltitudeLayers() in Chunk.cpp.
+const float HEIGHT_GAIN = 3.0;
+float normHeight(float alt) {
+    float n    = max(0.0, alt - waterAlt) * HEIGHT_GAIN;
+    float nMax = (1.0 - waterAlt) * HEIGHT_GAIN;
+    return (n / (1.0 + n)) * (1.0 + nMax) / nMax;
+}
+
+// Inverse isometric projection: given fragment screen position (rx,ry relative to
+// camOffset) and a NORMALISED ray height u in [0,1], return the world tile the ray
+// passes through at that height.  hC = u * VIS_LEVELS * sideH is the screen-px rise.
+// The result is a VIEW-space tile offset, which is then yaw-rotated into world
+// space by rotCS = (cos θ, sin θ) so Q/E spin the terrain under the camera.
+vec2 rayTile(float rx, float ry, float u) {
+    float hC   = u * VIS_LEVELS * sideH;
+    float sumRT  = (ry + hC) / halfH;   // relTX + relTY (view space)
+    float diffRT = rx / halfW;           // relTX - relTY (view space)
+    vec2  view = vec2((sumRT + diffRT) * 0.5, (sumRT - diffRT) * 0.5);
+    vec2  world = vec2(view.x * rotCS.x - view.y * rotCS.y,
+                       view.x * rotCS.y + view.y * rotCS.x);   // Rot(+θ)
+    return world + camTile;
+}
+
+// Forward project a WORLD-space tile offset to the screen position of its block
+// top (north vertex).  Applies the inverse yaw Rot(−θ) then the iso transform —
+// the exact inverse of rayTile, so drawn block geometry matches the sampled tile.
+vec2 tileTopNorth(vec2 wrel, float blockPx) {
+    vec2 v = vec2( wrel.x * rotCS.x + wrel.y * rotCS.y,
+                  -wrel.x * rotCS.y + wrel.y * rotCS.x);        // Rot(−θ)
+    return vec2(camOffset.x + (v.x - v.y) * halfW,
+                camOffset.y + (v.x + v.y) * halfH - blockPx);
+}
+
+// Biome colour — mirrors getTerrainColour() in frag.fs.
+vec3 terrainColor(float h, float t, float m, float matID) {
+    if (matID > 195.0 && matID <= 210.0) return C_STONE;
+    if (matID > 145.0 && matID < 155.0)  return C_BRICK;
+    if (matID > 95.0  && matID < 105.0)  return C_WOOD;
+    if (matID > 55.0  && matID < 65.0)   return C_WOOD;   // Trunk block (tree centre)
+    if (matID > 70.0  && matID < 80.0)   return C_THACH;
+    if (matID > 45.0  && matID < 55.0)   return C_DIRT;
+    // Leaves (25): tree foliage; shadeHit() overrides the lower part with bark for
+    // the trunk two-tone, and terrain top/wall lighting gives it 3D relief.
+    if (matID > 20.0  && matID < 30.0)   return C_LEAFY;
+    if (h > 0.9) return C_SNOW;
+
+    vec3 lo, mid, hi;
+    if (t < 0.25) {
+        lo = C_GRASS; mid = C_STONE; hi = C_STONE;
+    } else if (t > 0.6) {
+        if (m < 0.4) { lo = C_SAND; mid = C_SAND;  hi = C_STONE; }
+        else         { lo = C_GRASS; mid = C_BUSH;  hi = C_FORES; }
+    } else {
+        if (m < 0.4) { lo = C_GRASS; mid = C_GRASS; hi = C_STONE; }
+        else         { lo = C_GRASS; mid = C_BUSH;   hi = C_FORES; }
+    }
+
+    if (h < 0.4)       return mix(C_SAND, lo,  smoothstep(0.30, 0.40, h));
+    else if (h < 0.55) return mix(lo,     mid, smoothstep(0.40, 0.55, h));
+    else               return mix(mid,    hi,  smoothstep(0.55, 0.70, h));
+}
+
+// Quantised NORMALISED column height in [0,1] at a tile — the single source of
+// truth for all geometry (march hit test, block height, lighting).  floor() snaps
+// each column onto a discrete cube layer so tops are flat and steps are crisp.
+float colNorm(float tx, float ty) {
+    float nh = normHeight(sampleTile(tx, ty).g);
+    return floor(nh * VIS_LEVELS) / VIS_LEVELS;
+}
+
+// Simulated water depth at a tile, in cube-layers (WATER_PER_BLOCK units = 1 layer).
+// The water map shares texture0's MAP_SIZE grid (one texel per tile), so it samples
+// with the same idx math as sampleTile.  Water stacks LINEARLY in layer space on top
+// of the terrain column, so a tile reads its depth in 1/8-layer steps → the "8 fill
+// levels per block".
+float waterLayersAt(float tx, float ty) {
+    vec2 idx = floor(vec2(tx, ty)) - mapOriginTile;
+    if (idx.x < 0.0 || idx.x >= float(mapSize) ||
+        idx.y < 0.0 || idx.y >= float(mapSize)) return 0.0;
+    vec2 uv = (idx + 0.5) / float(mapSize);
+    return texture(waterMap, uv).r * 255.0 / WATER_PER_BLOCK;
+}
+
+// Filled column top (terrain + its water) in normalised height — what the ray march
+// actually stops on, so water occludes like solid geometry and a tile's water surface
+// sits exactly `waterLayers` above its cube top.
+float fillNorm(float tx, float ty) {
+    return colNorm(tx, ty) + waterLayersAt(tx, ty) / VIS_LEVELS;
+}
+
+// Recent water movement at a tile, 0-1 (waterMap G channel = WaterSimulation flow,
+// scaled ×16 by IsoShaderRenderer).  Zero on still water — drives the whitewash.
+float waterFlowAt(float tx, float ty) {
+    vec2 idx = floor(vec2(tx, ty)) - mapOriginTile;
+    if (idx.x < 0.0 || idx.x >= float(mapSize) ||
+        idx.y < 0.0 || idx.y >= float(mapSize)) return 0.0;
+    vec2 uv = (idx + 0.5) / float(mapSize);
+    return texture(waterMap, uv).g;
+}
+
+// ── Value noise / fbm for procedural surface detail ─────────────────────────────
+// The terrain data is only 1 sample per tile, so without this each cube face is a
+// single flat colour.  Sampling fbm at the precise sub-tile hit position restores
+// the textured look the top-down shader gets from its per-fragment noise.
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+}
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+float fbm2(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int k = 0; k < 4; k++) { v += a * vnoise(p); p *= 2.0; a *= 0.5; }
+    return v;
+}
+
+// 3D hash in [0,1) — per-cube tint so the leaf canopy reads as discrete cubes.
+float hash31(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+
+// Normal-based diffuse lighting from the 4 cardinal neighbours (normalised heights).
+float computeLighting(float itx, float ity) {
+    float h_l = colNorm(itx - 1.0, ity);
+    float h_r = colNorm(itx + 1.0, ity);
+    float h_u = colNorm(itx, ity - 1.0);  // north (smaller ty)
+    float h_d = colNorm(itx, ity + 1.0);  // south (larger ty)
+
+    // Normalised heights have larger neighbour deltas than raw altitude did, so a
+    // smaller scale gives the same shading strength.
+    const float SCALE = 4.0;
+    vec3 n = normalize(vec3((h_l - h_r) * SCALE,
+                            (h_u - h_d) * SCALE,
+                            1.0));
+    float diffuse = dot(n, sunDir);
+    return clamp(0.40 + 0.60 * diffuse, 0.18, 1.0);
+}
+
+// Same diffuse model but over the FILLED surface (terrain + water), so a sheet of
+// water running down a slope catches the sun on its tilt instead of reading flat.
+float computeLightingFill(float itx, float ity) {
+    float h_l = fillNorm(itx - 1.0, ity);
+    float h_r = fillNorm(itx + 1.0, ity);
+    float h_u = fillNorm(itx, ity - 1.0);
+    float h_d = fillNorm(itx, ity + 1.0);
+    const float SCALE = 4.0;
+    vec3 n = normalize(vec3((h_l - h_r) * SCALE, (h_u - h_d) * SCALE, 1.0));
+    return clamp(0.55 + 0.45 * dot(n, sunDir), 0.30, 1.0);
+}
+
+// Day-cycle light tint — ported from frag.fs calculateLightColour() and fed the
+// same scaled time as the sun orbit, so dusk/dawn go orange and night goes moonlit
+// blue in both views at the same moments.  Applied to terrain and water, but NOT
+// to the space backdrop, which is self-luminous.
+const vec3 COLOR_NIGHT = vec3(0.25, 0.30, 0.50);   // brighter "moonlight"
+const vec3 COLOR_DAWN  = vec3(0.80, 0.50, 0.30);
+const vec3 COLOR_DAY   = vec3(1.00, 0.95, 0.90);
+
+vec3 calculateLightColour() {
+    float dayCycle = sin(dayTime);                  // -1 (night) … +1 (midday)
+    if (dayCycle < -0.2) return COLOR_NIGHT;
+    if (dayCycle <  0.2) return mix(COLOR_NIGHT, COLOR_DAWN, (dayCycle + 0.2) / 0.4);
+    if (dayCycle <  0.5) return mix(COLOR_DAWN,  COLOR_DAY,  (dayCycle - 0.2) / 0.3);
+    return COLOR_DAY;
+}
+
+// Pixel-art deep space — the backdrop wherever there is NO world data (unloaded
+// chunks, beyond the combined map, and behind any ray that misses), so the loaded
+// world reads as terrain floating in space while its real water stays water.  Same
+// quantisation philosophy as the chunky cube terrain: world-anchored pixel cells,
+// a low fixed-rate tick for the twinkle, and posterised flat bands instead of
+// smooth gradients.  Anchoring to world tiles makes the starfield pan and yaw 1:1
+// with the terrain, like a ground-plane texture, so nothing shimmers as the
+// camera moves.
+
+// One sparse spiral galaxy per big world cell (about half the cells roll empty).
+// The disc centre is kept near the cell middle and the radius capped so a galaxy
+// never crosses into a neighbouring cell — only the owning cell needs sampling.
+// Brightness is an elliptical core glow modulated by a two-arm spiral that winds
+// outward, posterised into flat bands to match the pixel-art look.
+vec3 galaxyLayer(vec2 cell) {
+    const float GCELL = 48.0;                       // world tiles per galaxy cell
+    vec2 gc = floor(cell / GCELL);
+    if (hash21(gc * 7.31 + 3.7) > 0.5) return vec3(0.0);   // this cell: no galaxy
+
+    vec2 centre = (gc + 0.5 + (vec2(hash21(gc + 11.1), hash21(gc + 27.7)) - 0.5) * 0.35) * GCELL;
+    vec2 d = (cell - centre) / GCELL;
+
+    // Random orientation, then squash one axis so the disc reads as a tilted ellipse.
+    float ang = 6.2832 * hash21(gc + 5.5);
+    vec2  p   = vec2(d.x * cos(ang) + d.y * sin(ang),
+                    -d.x * sin(ang) + d.y * cos(ang));
+    p.y *= 1.6 + 1.4 * hash21(gc + 9.9);
+
+    float rmax = 0.12 + 0.10 * hash21(gc + 15.3);
+    float t = length(p) / rmax;
+    if (t > 1.0) return vec3(0.0);
+
+    float arm  = cos(2.0 * atan(p.y, p.x) - t * 9.0);  // two arms winding outward
+    float glow = (1.0 - t) * (0.45 + 0.55 * max(0.0, arm));
+    glow = floor(glow * 5.0) / 5.0;                    // flat posterised bands
+    vec3 tint = mix(vec3(0.80, 0.75, 1.00), vec3(1.00, 0.82, 0.70), hash21(gc + 33.3));
+    return tint * glow * 0.55;
+}
+
+vec3 shadeSpace(vec2 wpos) {
+    const float CELLS  = 2.0;                   // nebula pixel cells per tile edge
+    const float SCELLS = 4.0;                   // finer grid keeps stars small
+    vec2  cell  = floor(wpos * CELLS)  / CELLS;
+    vec2  scell = floor(wpos * SCELLS) / SCELLS;
+    float tick  = floor(time * 5.0);            // 5 fps frame-stepped twinkle
+
+    // Near-black base with the faintest blue so "empty" still reads as space.
+    vec3 col = vec3(0.010, 0.012, 0.035);
+
+    // Nebulae: two broad fbm fields posterised into flat colour bands — a cool
+    // violet field and a warm magenta one, overlapping into richer mixes.
+    float neb1 = fbm2(cell * 0.045 + 13.7);
+    float neb2 = fbm2(cell * 0.075 - 41.2);
+    if (neb1 > 0.50) col += vec3(0.020, 0.012, 0.060);
+    if (neb1 > 0.60) col += vec3(0.030, 0.018, 0.075);
+    if (neb2 > 0.58) col += vec3(0.055, 0.018, 0.045);
+    if (neb2 > 0.68) col += vec3(0.065, 0.028, 0.040);
+
+    col += galaxyLayer(cell);
+
+    // Stars: rare bright cells on the fine grid.  Brightness tiers come from how
+    // far past the threshold the hash lands; a slow tick re-rolls the twinkle.
+    // max() keeps stars readable over nebulae without blowing out additively.
+    float s = hash21(scell * 17.13);
+    if (s > 0.99) {
+        float mag = (s - 0.99) / 0.01;
+        float tw  = 0.70 + 0.30 * hash21(scell + floor(tick * 0.5) * 0.371);
+        vec3  stc = mix(vec3(0.72, 0.84, 1.00), vec3(1.00, 0.92, 0.78), hash21(scell + 3.1));
+        col = max(col, stc * (0.35 + 0.65 * mag * mag) * tw);
+    }
+
+    return col;
+}
+
+// Shade a simulated-water surface hit.  The water column sits on top of the terrain
+// (terrTop) and is wLay cube-layers deep; uHit is where the ray met it.  Deep water is
+// dark, shallow water is light and lets the seabed show through; tops get a gentle
+// (deliberately non-sparkly) drift, vertical faces are a touch darker like terrain walls.
+// Cube seams make stacked water read as blocks, and the surface height itself steps in
+// 1/8-layer increments so a tile's fill level is legible.
+vec3 shadeWaterHit(vec2 tHit, float uHit, float terrTop, float wLay,
+                   float rawAlt, float temp, float mois, float matID, vec2 dpos) {
+    float waterTop = terrTop + wLay / VIS_LEVELS;
+    bool  isTop    = (waterTop - uHit) < 0.6 / VIS_LEVELS;
+
+    // Depth tint: shallow → C_WATER, deep → C_DEEP (~6 layers reads as fully deep).
+    float deep = clamp(wLay / 6.0, 0.0, 1.0);
+    vec3  base = mix(C_WATER, C_DEEP, deep);
+
+    // Translucency: thin water shows the seabed beneath; deep water hides it.
+    vec3  seabed  = terrainColor(rawAlt, temp, mois, matID) * 0.80;
+    float opacity = clamp(0.30 + wLay * 0.45, 0.30, 0.92);
+    vec3  col     = mix(seabed, base, opacity);
+
+    if (isTop) {
+        // Gentle surface drift — only lifts the crest a little, no sparkle.
+        float r = fbm2(dpos * 2.3 + vec2(time * 0.20, time * 0.13));
+        col += vec3(0.04, 0.06, 0.07) * smoothstep(0.55, 0.85, r);
+        col *= computeLightingFill(tHit.x + 0.5, tHit.y + 0.5);
+    } else {
+        // Vertical water face: darker and pushed toward deep blue.
+        col = mix(col, C_DEEP, 0.25) * 0.82;
+    }
+
+    // Cube seams so stacked water reads as blocks, fading out at far zoom like terrain.
+    float zL   = uHit * VIS_LEVELS;
+    float wT   = min(0.35, 1.2 / (2.0 * halfW));
+    float wZ   = min(0.35, 1.2 / sideH);
+    float fade = clamp(sideH * 0.25 - 0.5, 0.0, 1.0);
+    if (isTop) {
+        vec2 g = fract(dpos); g = min(g, 1.0 - g);
+        float edge = min(smoothstep(0.0, wT, g.x), smoothstep(0.0, wT, g.y));
+        col *= mix(1.0, 0.88 + 0.12 * edge, fade);
+    } else {
+        float gz = fract(zL); gz = min(gz, 1.0 - gz);
+        col *= mix(1.0, 0.78 + 0.22 * smoothstep(0.0, wZ, gz), fade);
+    }
+
+    // Whitewash: churning foam where the sim says water is MOVING (springs, rapids,
+    // waterfall faces, a passing surge).  Two counter-drifting noise fields make
+    // tumbling streaks rather than a static tint; still water has zero flow, so
+    // lakes and seas stay glassy.
+    float flow = waterFlowAt(tHit.x + 0.5, tHit.y + 0.5);
+    if (flow > 0.01) {
+        float churn = fbm2(dpos * 3.1 + vec2(time * 1.7, -time * 1.2))
+                    + fbm2(dpos * 5.3 + vec2(-time * 2.3, time * 1.5));
+        float foam  = smoothstep(0.05, 0.55, flow) * smoothstep(0.85, 1.35, churn);
+        if (!isTop) foam *= 0.6;   // spray on falling faces, a little subtler
+        col = mix(col, vec3(0.92, 0.95, 0.97), clamp(foam, 0.0, 0.85));
+    }
+
+    return col * calculateLightColour();
+}
+
+// Fully shade one terrain surface hit (biome/foliage albedo + texture, top/wall
+// diffuse lighting, cube edge lines, cast shadows) and return its lit colour.
+vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
+    float hitTX = tHit.x;
+    float hitTY = tHit.y;
+    vec4  px    = sampleTile(hitTX + 0.5, hitTY + 0.5);
+    float rawAlt   = px.g;                          // raw altitude → biome colour
+    float temp     = px.r;
+    float mois     = px.b;
+    float matID    = px.a * 255.0;
+
+    vec2 dpos = rayTile(rx, ry, uHit);
+
+    // matID 0 = void (no chunk data — see sampleTile): show the space backdrop.
+    // (Water is no longer an altitude band here; low ground below the old water line
+    // is dry terrain, and simulated water is composited as a separate march band.)
+    if (matID < 0.5) return shadeSpace(dpos);   // space: no day tint
+
+    // Simulated water: the march stops at the FILLED top (terrain + water), so when this
+    // hit sits above the terrain cube top we're in the water band — shade it and return.
+    float terrTop = colNorm(hitTX + 0.5, hitTY + 0.5);
+    float wLay    = waterLayersAt(hitTX + 0.5, hitTY + 0.5);
+    if (wLay > 0.0 && uHit > terrTop + 0.05 / VIS_LEVELS) {
+        return shadeWaterHit(tHit, uHit, terrTop, wLay, rawAlt, temp, mois, matID, dpos);
+    }
+
+    // Face classification: TOP vs vertical WALL (derived from the march, yaw-stable).
+    float htop  = colNorm(hitTX + 0.5, hitTY + 0.5);
+    bool  isTop = (htop - uHit) < 0.15 / VIS_LEVELS;
+
+    // Wall face axis from the sub-tile hit position: the ray enters the face the hit
+    // point is nearest, so the outward normal is the dominant axis of the offset from
+    // the tile centre.  Per-pixel and yaw-stable — the two visible faces of a column
+    // get crisply different sun lighting with a sharp corner between them.  (The old
+    // ray-step "tile below" normal was often diagonal, blending both faces into one
+    // flat shade — a big part of why columns read as stacked plates, not cubes.)
+    vec2  fc    = dpos - vec2(hitTX, hitTY) - 0.5;
+    bool  faceX = abs(fc.x) > abs(fc.y);
+    vec3  wallN = faceX ? vec3(sign(fc.x), 0.0, 0.0) : vec3(0.0, sign(fc.y), 0.0);
+    float along = faceX ? dpos.y : dpos.x;   // wall-plane horizontal coordinate
+    float zL    = uHit * VIS_LEVELS;          // height in layers (1 layer = 1 cube)
+
+    // Procedural surface detail (world-anchored so it doesn't shimmer).  Tops sample
+    // the world xy plane; walls sample the wall plane (along, z) so texture varies
+    // down the face instead of smearing into vertical streaks.
+    float grain = isTop ? fbm2(dpos * 3.5) : fbm2(vec2(along, zL) * 3.5);
+    float warp  = fbm2(dpos * 0.8 + 21.0);
+    float mgrain= fbm2(dpos * 1.3 - 7.0);
+
+    vec3 col = terrainColor(rawAlt + (warp - 0.5) * 0.05,
+                            temp    + (grain - 0.5) * 0.03,
+                            mois    + (mgrain - 0.5) * 0.03,
+                            matID);
+    col *= 0.80 + 0.34 * grain;
+
+    // Tree two-tone: green foliage near the top, brown trunk/bark deeper down a column.
+    // Tops and the upper CANOPY_DEPTH layers stay leafy; the tall central trunk shows.
+    // The per-cube hash tint makes each canopy cell a slightly different green so the
+    // crown reads as a cluster of discrete leaf cubes instead of one smooth mound.
+    if (matID > 20.0 && matID < 30.0) {
+        bool bark = !isTop && (htop - uHit) * VIS_LEVELS > CANOPY_DEPTH;
+        col = (bark ? C_WOOD : C_LEAFY) * (0.80 + 0.34 * grain);
+        col *= 0.82 + 0.30 * hash31(vec3(hitTX, hitTY, floor(zL - 0.25)));
+    }
+
+    // ── Cube edge lines ──────────────────────────────────────────────────────────
+    // Darken a thin band along every cube boundary: vertical seams between adjacent
+    // columns and horizontal seams between layers on walls, a tile grid on tops.
+    // Widths are screen-pixel-constant (converted to tile/layer units via halfW and
+    // sideH), and the lines fade out once cubes shrink below a few pixels so a far
+    // zoom doesn't dissolve into line soup.
+    float wT   = min(0.35, 1.2 / (2.0 * halfW));   // ~1.2 px in tile units
+    float wZ   = min(0.35, 1.2 / sideH);            // ~1.2 px in layer units
+    float fade = clamp(sideH * 0.25 - 0.5, 0.0, 1.0);
+    if (isTop) {
+        vec2 g = fract(dpos);
+        g = min(g, 1.0 - g);
+        float edge = min(smoothstep(0.0, wT, g.x), smoothstep(0.0, wT, g.y));
+        col *= mix(1.0, 0.80 + 0.20 * edge, fade);   // subtle grid on cube tops
+    } else {
+        float ga = fract(along); ga = min(ga, 1.0 - ga);
+        float gz = fract(zL);    gz = min(gz, 1.0 - gz);
+        float edge = min(smoothstep(0.0, wT, ga), smoothstep(0.0, wZ, gz));
+        col *= mix(1.0, 0.62 + 0.38 * edge, fade);   // strong cube grid on walls
+    }
+
+    float light;
+    if (isTop) {
+        light = computeLighting(hitTX, hitTY);
+    } else {
+        float diff  = max(0.0, dot(wallN, sunDir));
+        // Trunk wood is dark; lift its ambient floor so shadowed faces keep their sides.
+        float amb   = (matID > 55.0 && matID < 65.0) ? 0.50 : 0.28;
+        light = clamp(amb + 0.55 * diff, 0.18, 1.0);
+    }
+
+    // Cast shadows — same model as frag.fs: march toward the active light (sun by
+    // day, moon by night) and, on a hit, darken by a soft amount that fades with
+    // occluder distance, so a shadow thrown from a far peak is lighter than one at
+    // the foot of a cliff.  The shadow subtracts from the light and the result is
+    // floored at 0.2, mirroring frag.fs's clamp(shadowIntensity, 0.0, 0.8) — never
+    // a hard black band.  shadowStrength ~0 means the light sits at the horizon
+    // (sun↔moon handover): its shadows would be invisible, so skip the march.
+    // (Space returned earlier, so every hit reaching here is opaque terrain.)
+    if (shadowStrength > 0.005) {
+        vec3 op = vec3(dpos, uHit * VIS_LEVELS);
+        vec3 sp = op + sunDir * 1.3;          // first test past the own column
+        float inShadow = 0.0;
+        for (int i = 0; i < 64; i++) {
+            float h = colNorm(sp.x, sp.y) * VIS_LEVELS;
+            if (h > sp.z + 0.5) { inShadow = 1.0; break; }
+            if (sp.z > VIS_LEVELS) break;
+            // Adaptive step like frag.fs: grow with clearance above the terrain so
+            // the march spans the full height range, not just the first ~30 layers.
+            sp += sunDir * max(0.7, (sp.z - h) * 0.1);
+        }
+        // Distance falloff in frag.fs units (1.0 = the full height range).
+        float rayDist    = length(sp - op) / VIS_LEVELS;
+        float softShadow = inShadow * shadowStrength * (1.0 - smoothstep(0.0, 1.0, rayDist));
+        light = clamp(light - softShadow * 0.8, 0.2, 1.0);
+    }
+
+    return col * light * calculateLightColour();
+}
+
+// ────────────────────────── main ───────────────────────────────────────────────
+void main() {
+    // gl_FragCoord is in PHYSICAL framebuffer pixels (2× on a Retina display),
+    // but all our uniforms (camOffset, halfW, screenH …) are in LOGICAL pixels.
+    // Divide by dpiScale to work entirely in logical space, then flip Y from
+    // OpenGL (origin bottom-left) to screen convention (origin top-left).
+    float sx = gl_FragCoord.x / dpiScale;
+    float sy = screenH - gl_FragCoord.y / dpiScale;
+
+    float rx = sx - camOffset.x;
+    float ry = sy - camOffset.y;
+
+    // ── Ray march: step u from 1 (near/front) to 0 (far/back).  The hit test
+    // "column normalised-height >= u" is an exact ray-vs-box-column intersection;
+    // the first OUTSIDE→INSIDE crossing is the nearest surface (correct occlusion).
+    float dh = STEP_TILES / VIS_LEVELS;   // tile-sized step → no skipped columns
+    bool  hit  = false;
+    float uHit = 0.0;
+    vec2  tHit = vec2(0.0);
+
+    for (int i = 0; i < MAX_STEPS; i++) {
+        float u = uTop - float(i) * dh;
+        if (u < 0.0) u = 0.0;
+        vec2  tile = rayTile(rx, ry, u);
+        if (fillNorm(tile.x, tile.y) >= u) {
+            // Binary-search the boundary so silhouette edges stay crisp.
+            float lo = u, hi = min(uTop, u + dh);
+            for (int k = 0; k < 6; k++) {
+                float mid = (lo + hi) * 0.5;
+                vec2  tm  = rayTile(rx, ry, mid);
+                if (fillNorm(tm.x, tm.y) >= mid) lo = mid; else hi = mid;
+            }
+            uHit = lo;
+            tHit = floor(rayTile(rx, ry, lo));
+            hit  = true;
+            break;
+        }
+        if (u <= 0.0) break;   // reached the ground plane; nothing below
+    }
+
+    // A miss means the ray cleared every column down to the ground plane — show
+    // the same space backdrop, sampled where the ray crosses u=0 so it lines up
+    // seamlessly with space rendered via below-water-line hits.
+    if (!hit) { fragColor = vec4(shadeSpace(rayTile(rx, ry, 0.0)), 1.0); return; }
+
+    vec3 col = shadeHit(tHit, uHit, rx, ry);
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}

@@ -826,3 +826,118 @@ void main() {
     vec3 col = shadeHit(tHit, uHit, rx, ry);
     fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
+#version 330
+
+// Pixel-art deep-space backdrop for the FLAT top-down view — the same starfield the
+// isometric shader draws behind unloaded chunks (shadeSpace in iso.fs), rendered as a
+// full-screen pass so the loaded terrain reads as land floating in space instead of on
+// a white void.  The look is world-anchored: stars/nebulae/galaxies are keyed to world
+// tile coordinates, so they pan 1:1 with the terrain as the camera scrolls, like a
+// ground-plane texture, and nothing shimmers.
+//
+// Kept a standalone file (rather than shared with iso.fs) because the two shaders map
+// screen pixels to world coordinates completely differently: iso ray-marches a custom
+// projection, while this is a plain raylib Camera2D (world = (screen-offset)/zoom + target).
+
+out vec4 fragColor;
+
+// Camera2D mapping (all logical pixels / world px, matching the flat renderer).
+uniform vec2  camOffset;   // camera.offset (screen px, y down)
+uniform vec2  camTarget;   // camera.target (world px)
+uniform float zoom;        // camera.zoom
+uniform float screenH;     // GetScreenHeight() — logical px
+uniform float dpiScale;    // GetRenderHeight()/GetScreenHeight() (2.0 on Retina)
+uniform float tileWidth;   // TILE_WIDTH — world px per tile
+uniform float time;        // seconds (GetTime) — drives the twinkle
+
+// ── hash / value-noise / fbm — identical to iso.fs ──────────────────────────────
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+}
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+float fbm2(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int k = 0; k < 4; k++) { v += a * vnoise(p); p *= 2.0; a *= 0.5; }
+    return v;
+}
+
+// One sparse spiral galaxy per big world cell (about half the cells roll empty).
+vec3 galaxyLayer(vec2 cell) {
+    const float GCELL = 48.0;                       // world tiles per galaxy cell
+    vec2 gc = floor(cell / GCELL);
+    if (hash21(gc * 7.31 + 3.7) > 0.5) return vec3(0.0);   // this cell: no galaxy
+
+    vec2 centre = (gc + 0.5 + (vec2(hash21(gc + 11.1), hash21(gc + 27.7)) - 0.5) * 0.35) * GCELL;
+    vec2 d = (cell - centre) / GCELL;
+
+    // Random orientation, then squash one axis so the disc reads as a tilted ellipse.
+    float ang = 6.2832 * hash21(gc + 5.5);
+    vec2  p   = vec2(d.x * cos(ang) + d.y * sin(ang),
+                    -d.x * sin(ang) + d.y * cos(ang));
+    p.y *= 1.6 + 1.4 * hash21(gc + 9.9);
+
+    float rmax = 0.12 + 0.10 * hash21(gc + 15.3);
+    float t = length(p) / rmax;
+    if (t > 1.0) return vec3(0.0);
+
+    float arm  = cos(2.0 * atan(p.y, p.x) - t * 9.0);  // two arms winding outward
+    float glow = (1.0 - t) * (0.45 + 0.55 * max(0.0, arm));
+    glow = floor(glow * 5.0) / 5.0;                    // flat posterised bands
+    vec3 tint = mix(vec3(0.80, 0.75, 1.00), vec3(1.00, 0.82, 0.70), hash21(gc + 33.3));
+    return tint * glow * 0.55;
+}
+
+vec3 shadeSpace(vec2 wpos) {
+    const float CELLS  = 2.0;                   // nebula pixel cells per tile edge
+    const float SCELLS = 4.0;                   // finer grid keeps stars small
+    vec2  cell  = floor(wpos * CELLS)  / CELLS;
+    vec2  scell = floor(wpos * SCELLS) / SCELLS;
+    float tick  = floor(time * 5.0);            // 5 fps frame-stepped twinkle
+
+    // Near-black base with the faintest blue so "empty" still reads as space.
+    vec3 col = vec3(0.010, 0.012, 0.035);
+
+    // Nebulae: two broad fbm fields posterised into flat colour bands.
+    float neb1 = fbm2(cell * 0.045 + 13.7);
+    float neb2 = fbm2(cell * 0.075 - 41.2);
+    if (neb1 > 0.50) col += vec3(0.020, 0.012, 0.060);
+    if (neb1 > 0.60) col += vec3(0.030, 0.018, 0.075);
+    if (neb2 > 0.58) col += vec3(0.055, 0.018, 0.045);
+    if (neb2 > 0.68) col += vec3(0.065, 0.028, 0.040);
+
+    col += galaxyLayer(cell);
+
+    // Stars: rare bright cells on the fine grid; a slow tick re-rolls the twinkle.
+    float s = hash21(scell * 17.13);
+    if (s > 0.99) {
+        float mag = (s - 0.99) / 0.01;
+        float tw  = 0.70 + 0.30 * hash21(scell + floor(tick * 0.5) * 0.371);
+        vec3  stc = mix(vec3(0.72, 0.84, 1.00), vec3(1.00, 0.92, 0.78), hash21(scell + 3.1));
+        col = max(col, stc * (0.35 + 0.65 * mag * mag) * tw);
+    }
+
+    return col;
+}
+
+void main() {
+    // gl_FragCoord is in PHYSICAL framebuffer pixels; convert to LOGICAL space and flip
+    // Y (OpenGL origin bottom-left → screen origin top-left), matching iso.fs.
+    float sx = gl_FragCoord.x / dpiScale;
+    float sy = screenH - gl_FragCoord.y / dpiScale;
+
+    // Camera2D inverse transform: world px = (screen - offset)/zoom + target, then to tiles.
+    vec2 wpos = ((vec2(sx, sy) - camOffset) / zoom + camTarget) / tileWidth;
+
+    fragColor = vec4(shadeSpace(wpos), 1.0);
+}

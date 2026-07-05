@@ -1,5 +1,10 @@
 #version 330
-precision mediump float;
+// highp, not mediump: desktop GPUs promote mediump to 32-bit so it looks fine there,
+// but Android GPUs honour mediump as true 16-bit half-float (~3 decimal digits). That
+// isn't enough to resolve the floor(fragTexCoord*500) texel snapping cleanly, so chunk
+// edges mis-align (seams) and shimmer as the quads slide (jitter). ES 3.00 guarantees
+// highp in fragment shaders, so this is safe on every phone and a no-op on desktop.
+precision highp float;
 
 uniform sampler2D texture0;
 
@@ -238,6 +243,7 @@ void main() {
 
   colour = vec4(light * baseColour, 1.0);
 }#version 330
+precision highp float;   // highp so coord math stays stable on Android GPUs (see frag.fs)
 
 // Combined heightmap: R=temperature G=altitude B=moisture A=materialID (all 0-1)
 uniform sampler2D texture0;
@@ -827,6 +833,7 @@ void main() {
     fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 #version 330
+precision highp float;   // highp so world-anchored coord math stays stable on Android GPUs (see frag.fs)
 
 // Pixel-art deep-space backdrop for the FLAT top-down view — the same starfield the
 // isometric shader draws behind unloaded chunks (shadeSpace in iso.fs), rendered as a

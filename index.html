@@ -3,22 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dan Shea</title>
-    <meta name="description" content="Dan Shea — software engineer. A fractal portal, a three-body sigil, and the Topdown engine.">
-    <meta name="keywords" content="Dan Shea, personal website, projects, links, shaders, three body problem, WebGL, operating systems, software, engineer, seL4, UNSW, Arista">
+    <title>Dan Shea — Software Engineer</title>
+    <meta name="description" content="Dan Shea is a software engineer at Arista Networks in Sydney, Australia. Operating systems, microkernels (seL4), networks, and security. UNSW Software Engineering and Bioinformatics graduate.">
+    <meta name="keywords" content="Dan Shea, software engineer, Sydney, Arista Networks, seL4, microkernels, operating systems, UNSW, WebGL, three body problem, Topdown engine">
     <meta name="theme-color" content="#000000">
+    <link rel="canonical" href="https://danshea.net/">
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://danshea.net/">
-    <meta property="og:title" content="Dan Shea">
-    <meta property="og:description" content="Dan Shea — software engineer. A fractal portal, a three-body sigil, and the Topdown engine.">
+    <meta property="og:title" content="Dan Shea — Software Engineer">
+    <meta property="og:description" content="Software engineer at Arista Networks in Sydney. Operating systems, microkernels (seL4), networks, and security.">
+    <meta property="og:image" content="https://danshea.net/og.jpg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image">
     <meta property="twitter:url" content="https://danshea.net/">
-    <meta property="twitter:title" content="Dan Shea">
-    <meta property="twitter:description" content="Dan Shea — software engineer. A fractal portal, a three-body sigil, and the Topdown engine.">
+    <meta property="twitter:title" content="Dan Shea — Software Engineer">
+    <meta property="twitter:description" content="Software engineer at Arista Networks in Sydney. Operating systems, microkernels (seL4), networks, and security.">
+    <meta property="twitter:image" content="https://danshea.net/og.jpg">
+
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "Person",
+        "name": "Dan Shea",
+        "url": "https://danshea.net/",
+        "image": "https://danshea.net/og.jpg",
+        "description": "Software engineer at Arista Networks in Sydney, Australia. UNSW graduate in Software Engineering (First Class Honours) and Science, Bioinformatics (Distinction); completed his honours thesis with the Trustworthy Systems group, supervised by Gernot Heiser, optimising the seL4 microkernel. Interested in operating systems, microkernels, networks, and security.",
+        "jobTitle": "Software Engineer",
+        "award": "John Lions Computer Science Honours Award",
+        "worksFor": {
+            "@type": "Organization",
+            "name": "Arista Networks",
+            "url": "https://www.arista.com/"
+        },
+        "alumniOf": {
+            "@type": "CollegeOrUniversity",
+            "name": "University of New South Wales",
+            "url": "https://www.unsw.edu.au/"
+        },
+        "address": {
+            "@type": "PostalAddress",
+            "addressLocality": "Sydney",
+            "addressRegion": "NSW",
+            "addressCountry": "AU"
+        },
+        "sameAs": [
+            "https://github.com/danshea00",
+            "https://linkedin.com/in/danshea00",
+            "https://instagram.com/danshea00"
+        ],
+        "knowsAbout": [
+            "operating systems",
+            "microkernels",
+            "seL4",
+            "computer networks",
+            "security",
+            "FPGA",
+            "C++",
+            "bioinformatics"
+        ]
+    }
+    </script>
 
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='30' cy='62' r='13' fill='%23e879f9'/%3E%3Ccircle cx='70' cy='62' r='13' fill='%2360a5fa'/%3E%3Ccircle cx='50' cy='30' r='13' fill='%2334d399'/%3E%3C/svg%3E">
 
@@ -158,6 +207,7 @@
             <a href="https://github.com/danshea00">GitHub</a>
         </nav>
     </header>
+
 
     <script id="fractal-shader" type="x-shader/x-fragment">
         precision highp float;

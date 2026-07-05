@@ -1,0 +1,35 @@
+# Dan Shea
+
+> Dan Shea is a software engineer at Arista Networks in Sydney, Australia. His
+> interests include operating systems, microkernels, networks, and security.
+> This is his personal website.
+
+Dan has worked at Arista Networks since 2024 (previously interning there in
+2023). He graduated from the University of New South Wales (UNSW) with a
+Bachelor of Engineering (Honours) in Software Engineering, earning First Class
+Honours, and a Bachelor of Science in Bioinformatics with Distinction, as well
+as the John Lions Computer Science Honours Award. His honours thesis, with the
+Trustworthy Systems group and supervised by Gernot Heiser, worked on optimising
+an IRQ fastpath for the seL4 microkernel. He has taught
+operating systems courses at UNSW (COMP3231 Operating Systems and COMP9242
+Advanced Operating Systems) as a casual academic, and previously held a KCCG
+Genomics Summer Research Scholarship at the Garvan Institute of Medical
+Research.
+
+## Publications
+
+- "Quantitative ctDNA Detection in Hepatoblastoma: Implications for Precision
+  Medicine", Cancers, 19 December 2023.
+
+## Site contents
+
+- [Home](https://danshea.net/): An interactive WebGL fractal with a portal
+  into the Topdown engine, and an emblem animating stable three-body orbits.
+- [Topdown](https://danshea.net/topdown/): A from-scratch game engine by Dan,
+  compiled to WebAssembly and running in the browser.
+- [Resume](https://danshea.net/resume.pdf): Dan's resume (PDF).
+
+## Elsewhere
+
+- [GitHub](https://github.com/danshea00)
+- [LinkedIn](https://linkedin.com/in/danshea00)

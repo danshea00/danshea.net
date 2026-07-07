@@ -125,10 +125,13 @@ vec3 getTerrainColour(float h, float t, float m) {
   return col;
 }
 
-// Water is no longer a static altitude band painted over low terrain.  It is now a
-// SIMULATED quantity (see WaterSimulation) rendered as a separate overlay from the
-// per-tile water grid; the water pass lives in main() below.  colourDeepWater /
-// colourWater above are reused by that pass.
+// Two kinds of water share the palette above:
+//   • BASELINE water — ground carved below the waterline (the sea and lowland river
+//     channels) is permanent, depth-tinted water painted in main() below.
+//   • SIMULATED water (see WaterSimulation) — composited on top as a separate
+//     overlay from the per-tile water grid (World::drawWaterTopDown), and drained
+//     by the sim where it reaches baseline water, so it disappears into it.
+const float waterAlt = 0.295;  // sea level — keep in sync with iso.fs / Chunk.cpp
 
 // New helper to determine light colour based on time
 vec3 calculateLightColour() {
@@ -239,6 +242,26 @@ void main() {
       baseColour = colourLeaves;
   } else {
       baseColour = getTerrainColour(terrainHeight, temperature, moisture);
+  }
+
+  // Stamped materials (dirt roads through stone keeps): a per-tile shade step,
+  // quantized to a few bands, so buildings stay as chunky as the terrain instead
+  // of rendering as one smooth flat-colour slab.
+  if (materialID > 45.0 && materialID < 210.0) {
+      float band = floor(noise(fragCoord * 500.0) * 4.0) / 3.0;   // 4 flat steps
+      baseColour *= 0.86 + 0.20 * band;
+  }
+
+  // Baseline water: anything below the waterline is permanent sea / river.  Depth
+  // tints shelves shallow-blue and open ocean dark; the seabed normal shading from
+  // `light` still applies, so underwater relief reads through the colour.  A thin
+  // noisy foam band right at the waterline keeps coasts and riverbanks legible.
+  if (terrainHeight < waterAlt) {
+      float depth = smoothstep(0.0, 0.20, waterAlt - terrainHeight);
+      baseColour = mix(colourWater, colourDeepWater, depth);
+      float shore = 1.0 - smoothstep(0.0, 0.012, waterAlt - terrainHeight);
+      float foam  = shore * (0.25 + 0.45 * fbm(fragCoord * 220.0));
+      baseColour = mix(baseColour, vec3(0.9), foam);
   }
 
   colour = vec4(light * baseColour, 1.0);
@@ -599,6 +622,30 @@ vec3 shadeSpace(vec2 wpos) {
     return col;
 }
 
+// Cast-shadow factor (0 = lit, 1 = fully shadowed) — same model as frag.fs: march
+// toward the active light (sun by day, moon by night) and, on a hit, darken by a
+// soft amount that fades with occluder distance, so a shadow thrown from a far peak
+// is lighter than one at the foot of a cliff.  shadowStrength ~0 means the light
+// sits at the horizon (sun↔moon handover): its shadows would be invisible, so the
+// march is skipped.  Used by terrain hits and the baseline-water surface alike.
+float castShadow(vec2 dpos, float uHit) {
+    if (shadowStrength <= 0.005) return 0.0;
+    vec3 op = vec3(dpos, uHit * VIS_LEVELS);
+    vec3 sp = op + sunDir * 1.3;          // first test past the own column
+    float inShadow = 0.0;
+    for (int i = 0; i < 64; i++) {
+        float h = colNorm(sp.x, sp.y) * VIS_LEVELS;
+        if (h > sp.z + 0.5) { inShadow = 1.0; break; }
+        if (sp.z > VIS_LEVELS) break;
+        // Adaptive step like frag.fs: grow with clearance above the terrain so
+        // the march spans the full height range, not just the first ~30 layers.
+        sp += sunDir * max(0.7, (sp.z - h) * 0.1);
+    }
+    // Distance falloff in frag.fs units (1.0 = the full height range).
+    float rayDist = length(sp - op) / VIS_LEVELS;
+    return inShadow * shadowStrength * (1.0 - smoothstep(0.0, 1.0, rayDist));
+}
+
 // Shade a simulated-water surface hit.  The water column sits on top of the terrain
 // (terrTop) and is wLay cube-layers deep; uHit is where the ray met it.  Deep water is
 // dark, shallow water is light and lets the seabed show through; tops get a gentle
@@ -673,8 +720,6 @@ vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
     vec2 dpos = rayTile(rx, ry, uHit);
 
     // matID 0 = void (no chunk data — see sampleTile): show the space backdrop.
-    // (Water is no longer an altitude band here; low ground below the old water line
-    // is dry terrain, and simulated water is composited as a separate march band.)
     if (matID < 0.5) return shadeSpace(dpos);   // space: no day tint
 
     // Simulated water: the march stops at the FILLED top (terrain + water), so when this
@@ -683,6 +728,20 @@ vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
     float wLay    = waterLayersAt(hitTX + 0.5, hitTY + 0.5);
     if (wLay > 0.0 && uHit > terrTop + 0.05 / VIS_LEVELS) {
         return shadeWaterHit(tHit, uHit, terrTop, wLay, rawAlt, temp, mois, matID, dpos);
+    }
+
+    // Baseline water: ground carved below the waterline (the sea and lowland river
+    // channels) collapses onto the u=0 sea plane (normHeight), so a hit on such a
+    // tile is the PERMANENT water surface.  Depth-tinted with the same gentle drift
+    // as sim water, and it receives cast shadows so cliffs shade the sea.  The sim
+    // drains dynamic water that arrives on these tiles, so streams disappear into it.
+    if (rawAlt < waterAlt) {
+        float depth = smoothstep(0.0, 0.20, waterAlt - rawAlt);
+        vec3 col = mix(C_WATER, C_DEEP, depth);
+        float r = fbm2(dpos * 2.3 + vec2(time * 0.20, time * 0.13));
+        col += vec3(0.04, 0.06, 0.07) * smoothstep(0.55, 0.85, r);
+        float light = clamp(0.95 - castShadow(dpos, uHit) * 0.8, 0.2, 1.0);
+        return col * light * calculateLightColour();
     }
 
     // Face classification: TOP vs vertical WALL (derived from the march, yaw-stable).
@@ -724,6 +783,14 @@ vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
         col *= 0.82 + 0.30 * hash31(vec3(hitTX, hitTY, floor(zL - 0.25)));
     }
 
+    // Man-made materials (dirt roads through stone keeps): the same per-cube hash
+    // tint as the canopy, so a stamped building reads as individual laid blocks.
+    // Without it the flat constant colour renders as one smooth slab — visibly
+    // "hi-res" against the chunky terrain around it.
+    if (matID > 45.0 && matID < 210.0) {
+        col *= 0.84 + 0.26 * hash31(vec3(hitTX, hitTY, floor(zL - 0.25)));
+    }
+
     // ── Cube edge lines ──────────────────────────────────────────────────────────
     // Darken a thin band along every cube boundary: vertical seams between adjacent
     // columns and horizontal seams between layers on walls, a tile grid on tops.
@@ -755,31 +822,11 @@ vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
         light = clamp(amb + 0.55 * diff, 0.18, 1.0);
     }
 
-    // Cast shadows — same model as frag.fs: march toward the active light (sun by
-    // day, moon by night) and, on a hit, darken by a soft amount that fades with
-    // occluder distance, so a shadow thrown from a far peak is lighter than one at
-    // the foot of a cliff.  The shadow subtracts from the light and the result is
-    // floored at 0.2, mirroring frag.fs's clamp(shadowIntensity, 0.0, 0.8) — never
-    // a hard black band.  shadowStrength ~0 means the light sits at the horizon
-    // (sun↔moon handover): its shadows would be invisible, so skip the march.
-    // (Space returned earlier, so every hit reaching here is opaque terrain.)
-    if (shadowStrength > 0.005) {
-        vec3 op = vec3(dpos, uHit * VIS_LEVELS);
-        vec3 sp = op + sunDir * 1.3;          // first test past the own column
-        float inShadow = 0.0;
-        for (int i = 0; i < 64; i++) {
-            float h = colNorm(sp.x, sp.y) * VIS_LEVELS;
-            if (h > sp.z + 0.5) { inShadow = 1.0; break; }
-            if (sp.z > VIS_LEVELS) break;
-            // Adaptive step like frag.fs: grow with clearance above the terrain so
-            // the march spans the full height range, not just the first ~30 layers.
-            sp += sunDir * max(0.7, (sp.z - h) * 0.1);
-        }
-        // Distance falloff in frag.fs units (1.0 = the full height range).
-        float rayDist    = length(sp - op) / VIS_LEVELS;
-        float softShadow = inShadow * shadowStrength * (1.0 - smoothstep(0.0, 1.0, rayDist));
-        light = clamp(light - softShadow * 0.8, 0.2, 1.0);
-    }
+    // Cast shadows (see castShadow above).  The shadow subtracts from the light and
+    // the result is floored at 0.2, mirroring frag.fs's clamp(shadowIntensity, 0.0,
+    // 0.8) — never a hard black band.  (Space and water returned earlier, so every
+    // hit reaching here is opaque terrain.)
+    light = clamp(light - castShadow(dpos, uHit) * 0.8, 0.2, 1.0);
 
     return col * light * calculateLightColour();
 }

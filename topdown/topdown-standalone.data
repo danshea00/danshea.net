@@ -316,13 +316,10 @@ const float WATER_PER_BLOCK = 8.0;  // water sim units that fill one cube layer
 const float VIS_LEVELS = 128.0;  // VISUAL height levels — the visual height scale,
                                  // decoupled from the C++ discretisation so the whole
                                  // screen never collapses into one giant side-face.
-// Coarse march step sized in TILES, not in fixed u increments.  The ray advances
-// dh*VIS_LEVELS tiles horizontally per step, so to never skip an occluding column we
-// pick dh = STEP_TILES/VIS_LEVELS with STEP_TILES < 0.5.  (When STEP_TILES exceeded a
-// tile — e.g. STEPS=96 vs VIS_LEVELS=128 → 1.3 tiles/step — columns were skipped, and
-// which ones depended on the yaw phase: the "jagged at some angles" artefact.)
-const float STEP_TILES = 0.35;
-const int   MAX_STEPS  = 400;   // hard cap; the loop breaks early on a hit or at u=0
+// Hard cap on the march (see main): it walks one TILE CELL per iteration, and a ray
+// spanning the whole height range crosses at most 2*VIS_LEVELS cells whatever the
+// yaw, so 400 is slack.  The loop breaks early on a hit or at the ground plane.
+const int MAX_STEPS = 400;
 
 // Palette — mirrors IsoRenderer.cpp and frag.fs
 const vec3 C_DEEP  = vec3(0.00, 0.20, 0.50);
@@ -471,10 +468,10 @@ float waterFlowAt(float tx, float ty) {
     return texture(waterMap, uv).g;
 }
 
-// ── Value noise / fbm for procedural surface detail ─────────────────────────────
-// The terrain data is only 1 sample per tile, so without this each cube face is a
-// single flat colour.  Sampling fbm at the precise sub-tile hit position restores
-// the textured look the top-down shader gets from its per-fragment noise.
+// ── Value noise / fbm ───────────────────────────────────────────────────────────
+// Used ONLY by the animated water surface and the space backdrop.  Terrain is
+// deliberately flat-shaded (one colour per block, see shadeHit) — do not reintroduce
+// noise into terrain albedo or blocks stop matching their top-down tiles.
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 345.45));
     p += dot(p, p + 34.345);
@@ -494,13 +491,6 @@ float fbm2(vec2 p) {
     float v = 0.0, a = 0.5;
     for (int k = 0; k < 4; k++) { v += a * vnoise(p); p *= 2.0; a *= 0.5; }
     return v;
-}
-
-// 3D hash in [0,1) — per-cube tint so the leaf canopy reads as discrete cubes.
-float hash31(vec3 p) {
-    p = fract(p * 0.1031);
-    p += dot(p, p.yzx + 33.33);
-    return fract((p.x + p.y) * p.z);
 }
 
 // Normal-based diffuse lighting from the 4 cardinal neighbours (normalised heights).
@@ -628,9 +618,16 @@ vec3 shadeSpace(vec2 wpos) {
 // is lighter than one at the foot of a cliff.  shadowStrength ~0 means the light
 // sits at the horizon (sun↔moon handover): its shadows would be invisible, so the
 // march is skipped.  Used by terrain hits and the baseline-water surface alike.
-float castShadow(vec2 dpos, float uHit) {
+//
+// `op` is the march origin in (tileX, tileY, layer) units and the caller must pass a
+// BLOCK-QUANTISED point — the centre of the block face being shaded, never the
+// per-pixel hit position.  Every fragment of a face then marches from the same place
+// and gets the same answer, so shadow edges land on block boundaries instead of
+// cutting a soft gradient across a face.  That is exactly how the top-down view reads
+// blocky: frag.fs snaps its sample to the texel grid (floor(fragTexCoord*500)/500)
+// before it marches, so one tile = one shadow value.
+float castShadow(vec3 op) {
     if (shadowStrength <= 0.005) return 0.0;
-    vec3 op = vec3(dpos, uHit * VIS_LEVELS);
     vec3 sp = op + sunDir * 1.3;          // first test past the own column
     float inShadow = 0.0;
     for (int i = 0; i < 64; i++) {
@@ -674,20 +671,6 @@ vec3 shadeWaterHit(vec2 tHit, float uHit, float terrTop, float wLay,
     } else {
         // Vertical water face: darker and pushed toward deep blue.
         col = mix(col, C_DEEP, 0.25) * 0.82;
-    }
-
-    // Cube seams so stacked water reads as blocks, fading out at far zoom like terrain.
-    float zL   = uHit * VIS_LEVELS;
-    float wT   = min(0.35, 1.2 / (2.0 * halfW));
-    float wZ   = min(0.35, 1.2 / sideH);
-    float fade = clamp(sideH * 0.25 - 0.5, 0.0, 1.0);
-    if (isTop) {
-        vec2 g = fract(dpos); g = min(g, 1.0 - g);
-        float edge = min(smoothstep(0.0, wT, g.x), smoothstep(0.0, wT, g.y));
-        col *= mix(1.0, 0.88 + 0.12 * edge, fade);
-    } else {
-        float gz = fract(zL); gz = min(gz, 1.0 - gz);
-        col *= mix(1.0, 0.78 + 0.22 * smoothstep(0.0, wZ, gz), fade);
     }
 
     // Whitewash: churning foam where the sim says water is MOVING (springs, rapids,
@@ -740,7 +723,9 @@ vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
         vec3 col = mix(C_WATER, C_DEEP, depth);
         float r = fbm2(dpos * 2.3 + vec2(time * 0.20, time * 0.13));
         col += vec3(0.04, 0.06, 0.07) * smoothstep(0.55, 0.85, r);
-        float light = clamp(0.95 - castShadow(dpos, uHit) * 0.8, 0.2, 1.0);
+        // The sea plane is layer 0, so the whole tile shadows as one flat cell.
+        float light = clamp(0.95 - castShadow(vec3(hitTX + 0.5, hitTY + 0.5, 0.0)) * 0.8,
+                            0.2, 1.0);
         return col * light * calculateLightColour();
     }
 
@@ -757,60 +742,24 @@ vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
     vec2  fc    = dpos - vec2(hitTX, hitTY) - 0.5;
     bool  faceX = abs(fc.x) > abs(fc.y);
     vec3  wallN = faceX ? vec3(sign(fc.x), 0.0, 0.0) : vec3(0.0, sign(fc.y), 0.0);
-    float along = faceX ? dpos.y : dpos.x;   // wall-plane horizontal coordinate
-    float zL    = uHit * VIS_LEVELS;          // height in layers (1 layer = 1 cube)
 
-    // Procedural surface detail (world-anchored so it doesn't shimmer).  Tops sample
-    // the world xy plane; walls sample the wall plane (along, z) so texture varies
-    // down the face instead of smearing into vertical streaks.
-    float grain = isTop ? fbm2(dpos * 3.5) : fbm2(vec2(along, zL) * 3.5);
-    float warp  = fbm2(dpos * 0.8 + 21.0);
-    float mgrain= fbm2(dpos * 1.3 - 7.0);
+    // FLAT albedo: the tile's colour straight from the biome palette, no sub-tile
+    // noise.  A block is one colour — the same colour the top-down view paints that
+    // tile — so the two views agree and cubes read as solid blocks, not textured
+    // rock.  (Earlier this perturbed alt/temp/moisture with fbm and multiplied in a
+    // grain term; that varied WITHIN a single face, which is the "textured" look.)
+    vec3 col = terrainColor(rawAlt, temp, mois, matID);
 
-    vec3 col = terrainColor(rawAlt + (warp - 0.5) * 0.05,
-                            temp    + (grain - 0.5) * 0.03,
-                            mois    + (mgrain - 0.5) * 0.03,
-                            matID);
-    col *= 0.80 + 0.34 * grain;
-
-    // Tree two-tone: green foliage near the top, brown trunk/bark deeper down a column.
-    // Tops and the upper CANOPY_DEPTH layers stay leafy; the tall central trunk shows.
-    // The per-cube hash tint makes each canopy cell a slightly different green so the
-    // crown reads as a cluster of discrete leaf cubes instead of one smooth mound.
+    // Tree two-tone: green foliage near the top, brown trunk/bark deeper down a
+    // column, so the tall central trunk shows under the canopy.  Still one flat
+    // colour per block — only which of the two it is varies.
     if (matID > 20.0 && matID < 30.0) {
         bool bark = !isTop && (htop - uHit) * VIS_LEVELS > CANOPY_DEPTH;
-        col = (bark ? C_WOOD : C_LEAFY) * (0.80 + 0.34 * grain);
-        col *= 0.82 + 0.30 * hash31(vec3(hitTX, hitTY, floor(zL - 0.25)));
+        col = bark ? C_WOOD : C_LEAFY;
     }
 
-    // Man-made materials (dirt roads through stone keeps): the same per-cube hash
-    // tint as the canopy, so a stamped building reads as individual laid blocks.
-    // Without it the flat constant colour renders as one smooth slab — visibly
-    // "hi-res" against the chunky terrain around it.
-    if (matID > 45.0 && matID < 210.0) {
-        col *= 0.84 + 0.26 * hash31(vec3(hitTX, hitTY, floor(zL - 0.25)));
-    }
-
-    // ── Cube edge lines ──────────────────────────────────────────────────────────
-    // Darken a thin band along every cube boundary: vertical seams between adjacent
-    // columns and horizontal seams between layers on walls, a tile grid on tops.
-    // Widths are screen-pixel-constant (converted to tile/layer units via halfW and
-    // sideH), and the lines fade out once cubes shrink below a few pixels so a far
-    // zoom doesn't dissolve into line soup.
-    float wT   = min(0.35, 1.2 / (2.0 * halfW));   // ~1.2 px in tile units
-    float wZ   = min(0.35, 1.2 / sideH);            // ~1.2 px in layer units
-    float fade = clamp(sideH * 0.25 - 0.5, 0.0, 1.0);
-    if (isTop) {
-        vec2 g = fract(dpos);
-        g = min(g, 1.0 - g);
-        float edge = min(smoothstep(0.0, wT, g.x), smoothstep(0.0, wT, g.y));
-        col *= mix(1.0, 0.80 + 0.20 * edge, fade);   // subtle grid on cube tops
-    } else {
-        float ga = fract(along); ga = min(ga, 1.0 - ga);
-        float gz = fract(zL);    gz = min(gz, 1.0 - gz);
-        float edge = min(smoothstep(0.0, wT, ga), smoothstep(0.0, wZ, gz));
-        col *= mix(1.0, 0.62 + 0.38 * edge, fade);   // strong cube grid on walls
-    }
+    // (No drawn cube outlines and no per-cube tint: cubes read as cubes from the
+    // per-face lighting alone.)
 
     float light;
     if (isTop) {
@@ -826,7 +775,19 @@ vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
     // the result is floored at 0.2, mirroring frag.fs's clamp(shadowIntensity, 0.0,
     // 0.8) — never a hard black band.  (Space and water returned earlier, so every
     // hit reaching here is opaque terrain.)
-    light = clamp(light - castShadow(dpos, uHit) * 0.8, 0.2, 1.0);
+    //
+    // The origin is the centre of THIS block's face, so the face takes one uniform
+    // shadow value and the shadow steps block by block: a cube top marches from its
+    // top-surface centre, a wall from the middle of that cube's visible side (nudged
+    // a hair clear of the block so the march starts in the neighbouring cell, not
+    // inside its own column).  A tall stack therefore shows a distinct shadow value
+    // per cube down its side rather than a smooth vertical ramp.
+    vec3 sOrigin = isTop
+        ? vec3(hitTX + 0.5, hitTY + 0.5, htop * VIS_LEVELS)
+        : vec3(hitTX + 0.5 + wallN.x * 0.52,
+               hitTY + 0.5 + wallN.y * 0.52,
+               floor(uHit * VIS_LEVELS) + 0.5);
+    light = clamp(light - castShadow(sOrigin) * 0.8, 0.2, 1.0);
 
     return col * light * calculateLightColour();
 }
@@ -843,32 +804,56 @@ void main() {
     float rx = sx - camOffset.x;
     float ry = sy - camOffset.y;
 
-    // ── Ray march: step u from 1 (near/front) to 0 (far/back).  The hit test
-    // "column normalised-height >= u" is an exact ray-vs-box-column intersection;
-    // the first OUTSIDE→INSIDE crossing is the nearest surface (correct occlusion).
-    float dh = STEP_TILES / VIS_LEVELS;   // tile-sized step → no skipped columns
+    // ── Ray march: walk u from uTop (near/front) down to 0 (far/back), ONE TILE
+    // CELL AT A TIME.  rayTile is affine in u, so the ray is a straight line in tile
+    // space, P(u) = P0 + D*u, and a grid walk (Amanatides–Woo) visits exactly the
+    // cells it passes through.  Within a cell the filled column top H is constant and
+    // the ray spans u ∈ [uOut, uIn], so the intersection is EXACT: it is inside the
+    // column iff H >= uOut, entering at min(uIn, H) — the cube top when the ray came
+    // down onto it, the side wall when it crossed the cell boundary already below H.
+    // The first such cell is the nearest surface, so occlusion stays correct.
+    //
+    // (The old march sampled a point every STEP_TILES and refined with a binary
+    // search.  A ray that only grazed a column could pass over it between two
+    // samples and never see it, and whether that happened varied pixel to pixel —
+    // that was the vertically choppy silhouette.  A cell walk cannot skip a column,
+    // and it needs fewer samples: one per tile crossed instead of ~3.)
+    vec2 P0 = rayTile(rx, ry, 0.0);
+    vec2 D  = rayTile(rx, ry, 1.0) - P0;   // tile displacement per unit of u
+
+    // As u falls the ray moves by -D, so it leaves each cell through the low
+    // boundary on an axis where D is positive and the high one where D is negative.
+    vec2 exitEdge = vec2(D.x > 0.0 ? 0.0 : 1.0, D.y > 0.0 ? 0.0 : 1.0);
+    vec2 cellStep = vec2(D.x > 0.0 ? -1.0 : 1.0, D.y > 0.0 ? -1.0 : 1.0);
+
     bool  hit  = false;
     float uHit = 0.0;
     vec2  tHit = vec2(0.0);
+    float uIn  = uTop;
+    vec2  cell = floor(rayTile(rx, ry, uTop));
 
     for (int i = 0; i < MAX_STEPS; i++) {
-        float u = uTop - float(i) * dh;
-        if (u < 0.0) u = 0.0;
-        vec2  tile = rayTile(rx, ry, u);
-        if (fillNorm(tile.x, tile.y) >= u) {
-            // Binary-search the boundary so silhouette edges stay crisp.
-            float lo = u, hi = min(uTop, u + dh);
-            for (int k = 0; k < 6; k++) {
-                float mid = (lo + hi) * 0.5;
-                vec2  tm  = rayTile(rx, ry, mid);
-                if (fillNorm(tm.x, tm.y) >= mid) lo = mid; else hi = mid;
-            }
-            uHit = lo;
-            tHit = floor(rayTile(rx, ry, lo));
+        // u at each axis' exit boundary; going DOWN in u, the nearer one is the
+        // LARGER.  A near-zero D component means the ray runs parallel to that axis
+        // (happens at 45° yaw) and never crosses those boundaries.
+        vec2 ub = vec2(-1.0e9);
+        if (abs(D.x) > 1.0e-6) ub.x = (cell.x + exitEdge.x - P0.x) / D.x;
+        if (abs(D.y) > 1.0e-6) ub.y = (cell.y + exitEdge.y - P0.y) / D.y;
+        // Clamped to the ground plane below and to uIn above (a start position that
+        // lands exactly on a boundary can put the first exit a hair above uTop).
+        float uOut = clamp(max(ub.x, ub.y), 0.0, uIn);
+
+        float H = fillNorm(cell.x + 0.5, cell.y + 0.5);
+        if (H >= uOut) {
+            uHit = min(uIn, H);
+            tHit = cell;
             hit  = true;
             break;
         }
-        if (u <= 0.0) break;   // reached the ground plane; nothing below
+
+        if (uOut <= 0.0) break;   // reached the ground plane; nothing below
+        if (ub.x > ub.y) cell.x += cellStep.x; else cell.y += cellStep.y;
+        uIn = uOut;
     }
 
     // A miss means the ray cleared every column down to the ground plane — show

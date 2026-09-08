@@ -88,41 +88,37 @@ vec3 getNormal(vec2 pos) {
   return normal;
 }
 
+// Keep this palette identical in frag.fs and iso.fs; colors are per tile.
+vec3 biomeFoliage(float t, float m) {
+    vec3 temperate = mix(vec3(0.38,0.49,0.19), vec3(0.18,0.40,0.17), smoothstep(0.35,0.60,m));
+    vec3 warm = mix(vec3(0.40,0.46,0.17), vec3(0.10,0.39,0.24), smoothstep(0.45,0.60,m));
+    vec3 leaves = mix(temperate, warm, smoothstep(0.56,0.66,t));
+    return mix(vec3(0.18,0.32,0.30), leaves, smoothstep(0.21,0.29,t));
+}
+
+vec3 biomeGround(float h, float t, float m) {
+    vec3 stone = vec3(0.427,0.463,0.529);
+    vec3 sand = vec3(0.855,0.714,0.455);
+    vec3 plains = vec3(0.596,0.678,0.353);
+    vec3 forest = mix(vec3(0.396,0.522,0.255), vec3(0.278,0.463,0.271), smoothstep(0.4,0.7,h));
+    vec3 temperate = mix(plains, forest, smoothstep(0.36,0.44,m));
+    vec3 badlands = mix(vec3(0.694,0.369,0.243), vec3(0.79,0.51,0.31), smoothstep(0.46,0.62,h));
+    vec3 desert = mix(sand, badlands, smoothstep(0.41,0.45,h));
+    vec3 warm = mix(desert, vec3(0.702,0.663,0.306), smoothstep(0.28,0.36,m));
+    warm = mix(warm, vec3(0.188,0.459,0.290), smoothstep(0.48,0.56,m));
+    vec3 col = mix(temperate, warm, smoothstep(0.56,0.64,t));
+    float marsh = smoothstep(0.64,0.72,m) * (1.0-smoothstep(0.36,0.40,h));
+    col = mix(col, vec3(0.369,0.471,0.322), marsh);
+    vec3 cold = mix(vec3(0.569,0.592,0.545), vec3(0.255,0.404,0.388), smoothstep(0.41,0.49,m));
+    col = mix(cold, col, smoothstep(0.21,0.29,t));
+    col = mix(col, stone, smoothstep(0.70,0.88,h)*0.65);
+    vec3 shore = mix(sand, vec3(0.48,0.49,0.37), marsh);
+    col = mix(shore, col, smoothstep(0.30,0.335,h));
+    return mix(col, vec3(0.824,0.878,0.871), smoothstep(0.87,0.93,h));
+}
+
 vec3 getTerrainColour(float h, float t, float m) {
-  float noisyHeight = h + noise(gl_FragCoord.xy * 0.1) * 0.01;
-  float noisyTemp = t + noise(gl_FragCoord.xy * 0.2 + 10.0) * 0.01;
-  float noisyMoisture = m + noise(gl_FragCoord.xy * 0.3 - 10.0) * 0.01;
-  
-  vec3 col;
-  if (noisyHeight > 0.9) {
-    col = colourSnow;
-  } else {
-    vec3 biome_low;
-    vec3 biome_mid;
-    vec3 biome_high;
-    
-    if (noisyTemp < 0.25) {
-        biome_low = colourGrass; biome_mid = colourStone; biome_high = colourStone;
-    } else if (noisyTemp > 0.6) {
-        if (noisyMoisture < 0.4) { biome_low = colourSand; biome_mid = colourSand; biome_high = colourStone; }
-        else { biome_low = colourGrass; biome_mid = colourBush; biome_high = colourForest; }
-    } else {
-        if (noisyMoisture < 0.4) { biome_low = colourGrass; biome_mid = colourGrass; biome_high = colourStone; } 
-        else { biome_low = colourGrass; biome_mid = colourBush; biome_high = colourForest; }
-    }
-    
-    if (noisyHeight < 0.4) {
-        float t_h = smoothstep(0.3, 0.4, noisyHeight);
-        col = mix(colourSand, biome_low, t_h);
-    } else if (noisyHeight < 0.55) {
-        float t_h = smoothstep(0.4, 0.55, noisyHeight);
-        col = mix(biome_low, biome_mid, t_h);
-    } else { 
-        float t_h = smoothstep(0.55, 0.7, noisyHeight);
-        col = mix(biome_mid, biome_high, t_h);
-    }
-  }
-  return col;
+    return biomeGround(h, t, m);
 }
 
 // Two kinds of water share the palette above:
@@ -224,7 +220,15 @@ void main() {
   vec3 baseColour;
 
   // Material Overrides — IDs match MaterialID enum in Material.h
-  if (materialID > 210.0) {                          // 255 = Default terrain
+  if (abs(materialID - 85.0) < 2.0) {
+      baseColour = colourThatch;
+  } else if (abs(materialID - 110.0) < 2.0) {
+      baseColour = vec3(0.48, 0.22, 0.13);
+  } else if (abs(materialID - 160.0) < 2.0) {
+      baseColour = vec3(0.62, 0.29, 0.18);
+  } else if (abs(materialID - 180.0) < 2.0) {
+      baseColour = vec3(0.24, 0.31, 0.39);
+  } else if (materialID > 210.0) {                          // 255 = Default terrain
       baseColour = getTerrainColour(terrainHeight, temperature, moisture);
   } else if (materialID > 195.0) {                   // 200 = Stone
       baseColour = colourStone;
@@ -239,7 +243,7 @@ void main() {
   } else if (materialID > 55.0 && materialID < 65.0) {   // 60 = Trunk (tree centre)
       baseColour = colourWood;
   } else if (materialID > 20.0 && materialID < 30.0) {   // 25 = Leaves (trees)
-      baseColour = colourLeaves;
+      baseColour = biomeFoliage(temperature, moisture);
   } else {
       baseColour = getTerrainColour(terrainHeight, temperature, moisture);
   }
@@ -401,8 +405,41 @@ vec2 tileTopNorth(vec2 wrel, float blockPx) {
                 camOffset.y + (v.x + v.y) * halfH - blockPx);
 }
 
+// Keep this palette identical in frag.fs and iso.fs; colors are per tile.
+vec3 biomeFoliage(float t, float m) {
+    vec3 temperate = mix(vec3(0.38,0.49,0.19), vec3(0.18,0.40,0.17), smoothstep(0.35,0.60,m));
+    vec3 warm = mix(vec3(0.40,0.46,0.17), vec3(0.10,0.39,0.24), smoothstep(0.45,0.60,m));
+    vec3 leaves = mix(temperate, warm, smoothstep(0.56,0.66,t));
+    return mix(vec3(0.18,0.32,0.30), leaves, smoothstep(0.21,0.29,t));
+}
+
+vec3 biomeGround(float h, float t, float m) {
+    vec3 stone = vec3(0.427,0.463,0.529);
+    vec3 sand = vec3(0.855,0.714,0.455);
+    vec3 plains = vec3(0.596,0.678,0.353);
+    vec3 forest = mix(vec3(0.396,0.522,0.255), vec3(0.278,0.463,0.271), smoothstep(0.4,0.7,h));
+    vec3 temperate = mix(plains, forest, smoothstep(0.36,0.44,m));
+    vec3 badlands = mix(vec3(0.694,0.369,0.243), vec3(0.79,0.51,0.31), smoothstep(0.46,0.62,h));
+    vec3 desert = mix(sand, badlands, smoothstep(0.41,0.45,h));
+    vec3 warm = mix(desert, vec3(0.702,0.663,0.306), smoothstep(0.28,0.36,m));
+    warm = mix(warm, vec3(0.188,0.459,0.290), smoothstep(0.48,0.56,m));
+    vec3 col = mix(temperate, warm, smoothstep(0.56,0.64,t));
+    float marsh = smoothstep(0.64,0.72,m) * (1.0-smoothstep(0.36,0.40,h));
+    col = mix(col, vec3(0.369,0.471,0.322), marsh);
+    vec3 cold = mix(vec3(0.569,0.592,0.545), vec3(0.255,0.404,0.388), smoothstep(0.41,0.49,m));
+    col = mix(cold, col, smoothstep(0.21,0.29,t));
+    col = mix(col, stone, smoothstep(0.70,0.88,h)*0.65);
+    vec3 shore = mix(sand, vec3(0.48,0.49,0.37), marsh);
+    col = mix(shore, col, smoothstep(0.30,0.335,h));
+    return mix(col, vec3(0.824,0.878,0.871), smoothstep(0.87,0.93,h));
+}
+
 // Biome colour — mirrors getTerrainColour() in frag.fs.
 vec3 terrainColor(float h, float t, float m, float matID) {
+    if (abs(matID - 85.0) < 2.0) return C_THACH;
+    if (abs(matID - 110.0) < 2.0) return vec3(0.48, 0.22, 0.13);
+    if (abs(matID - 160.0) < 2.0) return vec3(0.62, 0.29, 0.18);
+    if (abs(matID - 180.0) < 2.0) return vec3(0.24, 0.31, 0.39);
     if (matID > 195.0 && matID <= 210.0) return C_STONE;
     if (matID > 145.0 && matID < 155.0)  return C_BRICK;
     if (matID > 95.0  && matID < 105.0)  return C_WOOD;
@@ -411,23 +448,8 @@ vec3 terrainColor(float h, float t, float m, float matID) {
     if (matID > 45.0  && matID < 55.0)   return C_DIRT;
     // Leaves (25): tree foliage; shadeHit() overrides the lower part with bark for
     // the trunk two-tone, and terrain top/wall lighting gives it 3D relief.
-    if (matID > 20.0  && matID < 30.0)   return C_LEAFY;
-    if (h > 0.9) return C_SNOW;
-
-    vec3 lo, mid, hi;
-    if (t < 0.25) {
-        lo = C_GRASS; mid = C_STONE; hi = C_STONE;
-    } else if (t > 0.6) {
-        if (m < 0.4) { lo = C_SAND; mid = C_SAND;  hi = C_STONE; }
-        else         { lo = C_GRASS; mid = C_BUSH;  hi = C_FORES; }
-    } else {
-        if (m < 0.4) { lo = C_GRASS; mid = C_GRASS; hi = C_STONE; }
-        else         { lo = C_GRASS; mid = C_BUSH;   hi = C_FORES; }
-    }
-
-    if (h < 0.4)       return mix(C_SAND, lo,  smoothstep(0.30, 0.40, h));
-    else if (h < 0.55) return mix(lo,     mid, smoothstep(0.40, 0.55, h));
-    else               return mix(mid,    hi,  smoothstep(0.55, 0.70, h));
+    if (matID > 20.0  && matID < 30.0)   return biomeFoliage(t, m);
+    return biomeGround(h, t, m);
 }
 
 // Quantised NORMALISED column height in [0,1] at a tile — the single source of
@@ -750,12 +772,48 @@ vec3 shadeHit(vec2 tHit, float uHit, float rx, float ry) {
     // grain term; that varied WITHIN a single face, which is the "textured" look.)
     vec3 col = terrainColor(rawAlt, temp, mois, matID);
 
+    // Stamped houses carry eave/base altitude in R/B. This keeps roof steps,
+    // walls and foundations in the same heightfield used for occlusion/shadows.
+    bool house = abs(matID - 85.0) < 2.0 || abs(matID - 110.0) < 2.0
+              || abs(matID - 160.0) < 2.0 || abs(matID - 180.0) < 2.0;
+    if (house) {
+        float eave = floor(normHeight(px.r) * VIS_LEVELS);
+        float base = floor(normHeight(px.b) * VIS_LEVELS);
+        float z = uHit * VIS_LEVELS;
+        float along = faceX ? dpos.y : dpos.x;
+        if (isTop || z >= eave) {
+            // Broad courses make the roof slope legible without noisy tile grain.
+            float course = mod(floor(htop * VIS_LEVELS), 2.0);
+            col *= mix(0.90, 1.06, course);
+        } else {
+            bool masonry = matID > 150.0;
+            col = masonry ? vec3(0.68, 0.64, 0.54) : vec3(0.79, 0.68, 0.49);
+            if (abs(matID - 160.0) < 2.0) col = vec3(0.63, 0.43, 0.32);
+            float belowEave = eave - z;
+            // Timber posts / masonry courses, a dark fascia, and a stone footing.
+            if (!masonry && mod(along, 5.0) < 0.24) col = C_WOOD * 0.65;
+            if (masonry && fract(z) < 0.08) col *= 0.82;
+            if (belowEave < 0.45) col *= 0.52;
+            if (z < base + 0.65) col = C_STONE * 0.72;
+            float bay = mod(along, 5.0);
+            float storey = mod(belowEave, 3.5);
+            if (belowEave > 0.9 && z > base + 1.2 && bay > 1.5 && bay < 3.0
+                && storey > 1.0 && storey < 2.3) {
+                col = vec3(0.10, 0.16, 0.19); // recessed window
+                if (abs(bay - 2.25) < 0.09 || abs(storey - 1.65) < 0.07)
+                    col = vec3(0.45, 0.34, 0.22); // mullions
+            }
+            if (z > base + 0.1 && z < base + 2.3 && mod(along, 15.0) < 1.3)
+                col = C_WOOD * 0.48;
+        }
+    }
+
     // Tree two-tone: green foliage near the top, brown trunk/bark deeper down a
     // column, so the tall central trunk shows under the canopy.  Still one flat
     // colour per block — only which of the two it is varies.
     if (matID > 20.0 && matID < 30.0) {
         bool bark = !isTop && (htop - uHit) * VIS_LEVELS > CANOPY_DEPTH;
-        col = bark ? C_WOOD : C_LEAFY;
+        col = bark ? C_WOOD : biomeFoliage(temp, mois);
     }
 
     // (No drawn cube outlines and no per-cube tint: cubes read as cubes from the
@@ -871,18 +929,19 @@ precision highp float;   // highp so world-anchored coord math stays stable on A
 // isometric shader draws behind unloaded chunks (shadeSpace in iso.fs), rendered as a
 // full-screen pass so the loaded terrain reads as land floating in space instead of on
 // a white void.  The look is world-anchored: stars/nebulae/galaxies are keyed to world
-// tile coordinates, so they pan 1:1 with the terrain as the camera scrolls, like a
+// tile coordinates, so they pan and rotate 1:1 with the terrain, like a
 // ground-plane texture, and nothing shimmers.
 //
 // Kept a standalone file (rather than shared with iso.fs) because the two shaders map
 // screen pixels to world coordinates completely differently: iso ray-marches a custom
-// projection, while this is a plain raylib Camera2D (world = (screen-offset)/zoom + target).
+// projection, while this inverts the full raylib Camera2D transform.
 
 out vec4 fragColor;
 
 // Camera2D mapping (all logical pixels / world px, matching the flat renderer).
 uniform vec2  camOffset;   // camera.offset (screen px, y down)
 uniform vec2  camTarget;   // camera.target (world px)
+uniform vec2  rotCS;       // cos/sin of camera.rotation
 uniform float zoom;        // camera.zoom
 uniform float screenH;     // GetScreenHeight() — logical px
 uniform float dpiScale;    // GetRenderHeight()/GetScreenHeight() (2.0 on Retina)
@@ -975,8 +1034,11 @@ void main() {
     float sx = gl_FragCoord.x / dpiScale;
     float sy = screenH - gl_FragCoord.y / dpiScale;
 
-    // Camera2D inverse transform: world px = (screen - offset)/zoom + target, then to tiles.
-    vec2 wpos = ((vec2(sx, sy) - camOffset) / zoom + camTarget) / tileWidth;
+    // Undo camera rotation about its offset before translating back into world tiles.
+    vec2 view = (vec2(sx, sy) - camOffset) / zoom;
+    vec2 worldOffset = vec2(rotCS.x * view.x + rotCS.y * view.y,
+                          -rotCS.y * view.x + rotCS.x * view.y);
+    vec2 wpos = (worldOffset + camTarget) / tileWidth;
 
     fragColor = vec4(shadeSpace(wpos), 1.0);
 }

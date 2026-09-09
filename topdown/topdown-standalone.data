@@ -150,16 +150,7 @@ vec3 calculateLightColour() {
 }
 
 void main() {
-  const float borderU = 2.0 / 5.0;
-  const float borderV = 2.0 / 5.0;
-  const float centerEndU = 3.0 / 5.0;
-  const float centerEndV = 3.0 / 5.0;
-
-  if (fragTexCoord.x < borderU || fragTexCoord.y < borderV ||
-      fragTexCoord.x >= centerEndU || fragTexCoord.y >= centerEndV) {
-      discard;
-  }
-
+  // Chunk boundaries are rasterized by the cropped draw geometry.
   vec2 fragCoord = floor(fragTexCoord * vec2(500)) / vec2(500);
 
   vec4 rawData = texture(texture0, fragCoord);

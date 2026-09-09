@@ -1,6 +1,6 @@
 'use strict';
 
-const RESOLUTION_MULTIPLIER = 3; // e.g., 2 means texture is 2x canvas resolution in each dimension
+const RESOLUTION_MULTIPLIER = 3;
 
 const canvas = document.getElementById('gameCanvas');
 const shapeHud = document.getElementById('shapeHud');
@@ -151,6 +151,8 @@ void main() {
 // WebGL Programs
 let simProgram;
 let displayProgram;
+let simLocations;
+let displayLocations;
 
 // Buffers and Textures
 let quadBuffer;
@@ -171,7 +173,6 @@ let shapePlacementModeActive = true;
 let selectedShapeIndex = 0;
 let currentShapeRotation = 0; // 0, 90, 180, 270
 let lastKnownMouseNDC = { x: 0.5, y: 0.5 }; // Normalized Device Coordinates for mouse, default center
-// CELL_SIZE_FOR_PREVIEW is no longer used as texture size will match canvas pixel dimensions.
 
 // Zoom and Pan state
 let currentZoom = 1.0; // Start at no zoom (full view of the large texture)
@@ -194,8 +195,6 @@ const SHAPES = [
     { name: "Blinker", centerOffset: { r: 1, c: 0 }, pattern: [ [1,0], [1,1], [1,2] ] }
 ];
 
-
-// Removed fetchShaders function
 
 function createShader(gl, type, source) {
     const shader = gl.createShader(type);
@@ -238,6 +237,10 @@ function createFramebuffer(gl, texture) {
     const fb = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        console.error('Unable to create a complete framebuffer.');
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     return fb;
 }
 
@@ -260,6 +263,18 @@ function setupWebGL() {
 
     if (!simProgram || !displayProgram) return false;
 
+    simLocations = {
+        position: gl.getAttribLocation(simProgram, 'a_position'),
+        resolution: gl.getUniformLocation(simProgram, 'u_resolution'),
+        prevState: gl.getUniformLocation(simProgram, 'u_prevState')
+    };
+    displayLocations = {
+        position: gl.getAttribLocation(displayProgram, 'a_position'),
+        gameState: gl.getUniformLocation(displayProgram, 'u_gameState'),
+        zoom: gl.getUniformLocation(displayProgram, 'u_zoom'),
+        viewCenter: gl.getUniformLocation(displayProgram, 'u_viewCenter')
+    };
+
     // Buffer for a full-screen quad
     quadBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
@@ -272,22 +287,13 @@ function setupWebGL() {
     return true;
 }
 
-function initializeGridData(clear = true) {
+function initializeGridData() {
     const initialData = new Uint8Array(textureWidth * textureHeight * 4);
-    if (clear) { // Start with a clear grid
-        for (let i = 0; i < initialData.length; i += 4) {
-            initialData[i] = 0;   // R (state: 0 for dead)
-            initialData[i+1] = 0; // G
-            initialData[i+2] = 0; // B
-            initialData[i+3] = 255; // A
-        }
-    }
-    // For a random start, you could fill initialData randomly here.
 
     gl.bindTexture(gl.TEXTURE_2D, textures[0]);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, textureWidth, textureHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, initialData);
     gl.bindTexture(gl.TEXTURE_2D, textures[1]);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, textureWidth, textureHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); // Second texture initially empty
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, textureWidth, textureHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
 }
 
 
@@ -296,13 +302,10 @@ function resizeCanvas() {
     canvas.height = window.innerHeight;
     gl.viewport(0, 0, canvas.width, canvas.height);
 
-    // For WebGL, texture dimensions are more critical than canvas pixel dimensions for simulation
-    // Let's fix texture size for now, or make it configurable.
-    // For simplicity, we'll use a fixed texture size. Zoom will be visual only.
-    // Set texture dimensions to be a multiple of canvas pixel dimensions.
-    // This means at zoom 1.0, the view shows the entire (larger) texture.
-    textureWidth = canvas.width * RESOLUTION_MULTIPLIER;
-    textureHeight = canvas.height * RESOLUTION_MULTIPLIER;
+    // Keep the simulation grid denser than the display while respecting the GPU limit.
+    const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    textureWidth = Math.min(canvas.width * RESOLUTION_MULTIPLIER, maxTextureSize);
+    textureHeight = Math.min(canvas.height * RESOLUTION_MULTIPLIER, maxTextureSize);
 
     // Recreate textures and framebuffers for the new size
     if (textures[0]) gl.deleteTexture(textures[0]);
@@ -315,7 +318,7 @@ function resizeCanvas() {
     framebuffers[0] = createFramebuffer(gl, textures[0]);
     framebuffers[1] = createFramebuffer(gl, textures[1]);
 
-    initializeGridData(true); // Clear grid on resize
+    initializeGridData();
     currentTextureIndex = 0; // Reset to draw from the first texture
 }
 
@@ -324,11 +327,8 @@ function runSimulationStep() {
     gl.useProgram(simProgram);
 
     // Set uniforms for simulation shader
-    const resolutionLocation = gl.getUniformLocation(simProgram, "u_resolution");
-    gl.uniform2f(resolutionLocation, textureWidth, textureHeight);
-
-    const prevStateLocation = gl.getUniformLocation(simProgram, "u_prevState");
-    gl.uniform1i(prevStateLocation, 0); // Texture unit 0
+    gl.uniform2f(simLocations.resolution, textureWidth, textureHeight);
+    gl.uniform1i(simLocations.prevState, 0);
 
     // Bind the texture to read from
     gl.activeTexture(gl.TEXTURE0);
@@ -339,10 +339,9 @@ function runSimulationStep() {
     gl.viewport(0, 0, textureWidth, textureHeight); // Ensure viewport matches texture
 
     // Draw the quad (this executes the simulation shader for each pixel)
-    const positionLocation = gl.getAttribLocation(simProgram, "a_position");
-    gl.enableVertexAttribArray(positionLocation);
+    gl.enableVertexAttribArray(simLocations.position);
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
-    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(simLocations.position, 2, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
     // Swap textures for next frame
@@ -354,33 +353,22 @@ function displayState() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); // Render to canvas
     gl.viewport(0, 0, canvas.width, canvas.height); // Set viewport to canvas size
 
-    const gameStateLocation = gl.getUniformLocation(displayProgram, "u_gameState");
-    gl.uniform1i(gameStateLocation, 0); // Texture unit 0
-
-    const zoomLocation = gl.getUniformLocation(displayProgram, "u_zoom");
-    gl.uniform1f(zoomLocation, currentZoom);
-
-    const viewCenterLocation = gl.getUniformLocation(displayProgram, "u_viewCenter");
-    gl.uniform2f(viewCenterLocation, viewCenter.u, viewCenter.v);
+    gl.uniform1i(displayLocations.gameState, 0);
+    gl.uniform1f(displayLocations.zoom, currentZoom);
+    gl.uniform2f(displayLocations.viewCenter, viewCenter.u, viewCenter.v);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, textures[currentTextureIndex]); // Display the latest state
 
-    const positionLocation = gl.getAttribLocation(displayProgram, "a_position");
-    gl.enableVertexAttribArray(positionLocation);
+    gl.enableVertexAttribArray(displayLocations.position);
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
-    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(displayLocations.position, 2, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    // Draw shape preview (using 2D context on top for simplicity for now)
     drawPreviewOverlay();
 }
 
 function drawPreviewOverlay() {
-    // The preview is now intended to be part of the WebGL rendering if shapePlacementModeActive.
-    // This function will only update the HUD.
-    // If a 2D canvas overlay for preview was desired, it would be drawn here.
-    // For now, the main displayState handles rendering, and this just updates text.
     updateHudDisplay();
 }
 
@@ -460,7 +448,6 @@ function getMouseGridCoords(e) {
 
 function placeSelectedShapeOnTexture(texCoordR, texCoordC) {
     const shape = SHAPES[selectedShapeIndex];
-    const alivePixel = new Uint8Array([1, 0, 0, 255]); // R=1 (age 1), G=0, B=0, A=255
 
     shape.pattern.forEach(([origDr, origDc]) => {
         let dr = origDr - shape.centerOffset.r;
@@ -475,15 +462,7 @@ function placeSelectedShapeOnTexture(texCoordR, texCoordC) {
         const c = texCoordC + rDc;
 
         if (r >= 0 && r < textureHeight && c >= 0 && c < textureWidth) {
-            // Update current texture
-            gl.bindTexture(gl.TEXTURE_2D, textures[currentTextureIndex]);
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, c, textureHeight - 1 - r, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, alivePixel);
-
-            // If paused, also update the other texture to make the change "stick"
-            if (!gameRunning) {
-                gl.bindTexture(gl.TEXTURE_2D, textures[1 - currentTextureIndex]);
-                gl.texSubImage2D(gl.TEXTURE_2D, 0, c, textureHeight - 1 - r, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, alivePixel);
-            }
+            setCellAlive(r, c);
         }
     });
 
@@ -492,20 +471,24 @@ function placeSelectedShapeOnTexture(texCoordR, texCoordC) {
     }
 }
 
-function drawCellOnTexture(texCoordR, texCoordC) {
-     if (texCoordR < 0 || texCoordR >= textureHeight || texCoordC < 0 || texCoordC >= textureWidth) return;
+const ALIVE_CELL = new Uint8Array([1, 0, 0, 255]);
 
-    const pixels = new Uint8Array(1 * 1 * 4);
-    pixels[0] = 1; pixels[1] = 0; pixels[2] = 0; pixels[3] = 255; // R=1 (age 1), G=0, B=0
-
+function setCellAlive(row, column) {
     gl.bindTexture(gl.TEXTURE_2D, textures[currentTextureIndex]);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, texCoordC, textureHeight - 1 - texCoordR, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, column, textureHeight - 1 - row, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, ALIVE_CELL);
 
     if (!gameRunning) {
-        // If paused, also update the *other* texture
         gl.bindTexture(gl.TEXTURE_2D, textures[1 - currentTextureIndex]);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, texCoordC, textureHeight - 1 - texCoordR, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-        displayState(); // Force a redraw if paused
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, column, textureHeight - 1 - row, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, ALIVE_CELL);
+    }
+}
+
+function drawCellOnTexture(row, column) {
+    if (row < 0 || row >= textureHeight || column < 0 || column >= textureWidth) return;
+
+    setCellAlive(row, column);
+    if (!gameRunning) {
+        displayState();
     }
 }
 

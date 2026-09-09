@@ -24,16 +24,16 @@
     <meta property="og:url" content="https://danshea.net/">
     <meta property="og:title" content="Dan Shea — Software Engineer">
     <meta property="og:description" content="Software engineer at Arista Networks in Sydney. Operating systems, microkernels (seL4), networks, and security.">
-    <meta property="og:image" content="https://danshea.net/og.jpg">
-    <meta property="og:image:width" content="1200">
-    <meta property="og:image:height" content="630">
+    <meta property="og:image" content="https://danshea.net/snake.png">
+    <meta property="og:image:width" content="870">
+    <meta property="og:image:height" content="868">
 
     <!-- Twitter -->
-    <meta property="twitter:card" content="summary_large_image">
-    <meta property="twitter:url" content="https://danshea.net/">
-    <meta property="twitter:title" content="Dan Shea — Software Engineer">
-    <meta property="twitter:description" content="Software engineer at Arista Networks in Sydney. Operating systems, microkernels (seL4), networks, and security.">
-    <meta property="twitter:image" content="https://danshea.net/og.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://danshea.net/">
+    <meta name="twitter:title" content="Dan Shea — Software Engineer">
+    <meta name="twitter:description" content="Software engineer at Arista Networks in Sydney. Operating systems, microkernels (seL4), networks, and security.">
+    <meta name="twitter:image" content="https://danshea.net/snake.png">
 
     <script type="application/ld+json">
     {
@@ -41,7 +41,7 @@
         "@type": "Person",
         "name": "Dan Shea",
         "url": "https://danshea.net/",
-        "image": "https://danshea.net/og.jpg",
+        "image": "https://danshea.net/snake.png",
         "description": "Software engineer at Arista Networks in Sydney, Australia. UNSW graduate in Software Engineering (First Class Honours) and Science, Bioinformatics (Distinction); completed his honours thesis with the Trustworthy Systems group, supervised by Gernot Heiser, optimising the seL4 microkernel. Interested in operating systems, microkernels, networks, and security.",
         "jobTitle": "Software Engineer",
         "award": "John Lions Computer Science Honours Award",
@@ -104,20 +104,22 @@
         }
 
         header {
+            --heading-size: clamp(3.5rem, 9vw, 6.25rem);
             position: fixed;
             top: clamp(1.5rem, 4vw, 3rem);
             left: clamp(1.5rem, 4vw, 3rem);
             z-index: 2;
             pointer-events: none;
             user-select: none;
-            display: grid;
-            grid-template-columns: clamp(54px, 7vw, 80px) auto;
-            column-gap: 1.1rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.2em;
+            font-size: var(--heading-size);
         }
 
         h1 {
-            display: contents;
-            font-size: clamp(3.5rem, 9vw, 6.25rem);
+            margin: 0;
+            font-size: 1em;
             font-weight: 400;
             line-height: 0.85;
             letter-spacing: 0.01em;
@@ -126,9 +128,7 @@
         }
 
         #name {
-            grid-column: 2;
-            grid-row: 1;
-            align-self: center;
+            white-space: nowrap;
             font-family: "Enchanted Land", Georgia, serif;
             color: #000;
             -webkit-text-stroke: 4px #fff;
@@ -138,10 +138,8 @@
         #emblem {
             position: relative;
             flex: none;
-            grid-column: 1;
-            grid-row: 1;
-            width: clamp(54px, 7vw, 80px);
-            height: clamp(54px, 7vw, 80px);
+            width: 0.8em;
+            height: 0.8em;
             overflow: hidden;
             border-radius: 50%;
             background: #000;
@@ -170,22 +168,25 @@
             z-index: 1;
         }
 
+        #title-stack {
+            width: max-content;
+            font-size: 1em;
+        }
+
         nav {
             display: flex;
             flex-wrap: wrap;
-            grid-column: 2;
-            grid-row: 2;
             justify-content: center;
-            gap: 0.6rem 1.5rem;
+            gap: 0.07em 0.24em;
             width: 100%;
-            margin-top: 0.4rem;
+            margin-top: 0.05em;
         }
 
         nav a {
             pointer-events: auto;
             color: #fff;
             text-decoration: none;
-            font-size: 0.8rem;
+            font-size: 0.13em;
             text-transform: lowercase;
             letter-spacing: 0.18em;
             padding-bottom: 2px;
@@ -240,18 +241,18 @@
     </a>
 
     <header>
-        <h1>
-            <span id="emblem" aria-hidden="true">
-                <img id="emblem-snake" src="snake.png" alt="">
-                <canvas id="emblem-fg"></canvas>
-            </span>
-            <span id="name">Dan Shea</span>
-        </h1>
-        <nav>
-            <a href="resume.pdf">Resume</a>
-            <a href="https://linkedin.com/in/danshea00">LinkedIn</a>
-            <a href="https://github.com/danshea00">GitHub</a>
-        </nav>
+        <span id="emblem" aria-hidden="true">
+            <img id="emblem-snake" src="snake.png" alt="">
+            <canvas id="emblem-fg"></canvas>
+        </span>
+        <div id="title-stack">
+            <h1><span id="name">Dan Shea</span></h1>
+            <nav>
+                <a href="resume.pdf">Resume</a>
+                <a href="https://linkedin.com/in/danshea00">LinkedIn</a>
+                <a href="https://github.com/danshea00">GitHub</a>
+            </nav>
+        </div>
     </header>
 
 

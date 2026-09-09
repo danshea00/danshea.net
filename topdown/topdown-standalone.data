@@ -17,6 +17,7 @@ uniform float shadowStrength; // cast-shadow darkening of the active light (DayC
 uniform vec3 pix;
 uniform float time; // This is now "scaledTime" from C++
 uniform vec2 chunkWorldPos;
+uniform float localDetail; // Ground-cover variation is local-view only.
 
 const int STEPS = 200;
 const float rayIntensity = .8;
@@ -248,6 +249,13 @@ void main() {
       baseColour = getTerrainColour(terrainHeight, temperature, moisture);
   }
 
+  // Subtle tile-sized ground cover; retain the original hard pixel edges.
+  if (localDetail > 0.5 && materialID > 210.0 && terrainHeight > waterAlt) {
+      vec2 tile = chunkWorldPos / 10.0 + floor(fragTexCoord * 500.0) - 200.0;
+      float groundPatch = floor(fbm(tile * 0.12) * 5.0) / 4.0;
+      baseColour *= 0.92 + 0.12 * groundPatch + 0.06 * noise(tile);
+  }
+
   // Stamped materials (dirt roads through stone keeps): a per-tile shade step,
   // quantized to a few bands, so buildings stay as chunky as the terrain instead
   // of rendering as one smooth flat-colour slab.
@@ -385,3 +393,11 @@ void main() {
 
     fragColor = vec4(shadeSpace(wpos), 1.0);
 }
+‰PNG
+
+   IHDR   €      ŞXwˆ   sRGB ®Îé  »IDATh½Y¿oÛFşN¢(ËRb‰´Ël—Nmµ–"A(Ü¦åà%A–.™2èâ©ÈÔÉsş‚,ªQ¨¦6“PÄÚ
+¤V ¦’&±(Q”®ïèd¥ dS÷½ïıÒñİ#APöëì³ ”ßV«â|û™ø]X8–­Q«8=›
++öëÑx+èÙĞ³!¥c^ş óøŸdw^+ø·~%Ú/xjF=ùjV³K±ß&‘‰Š|İ4DÉÁ±ax< É¼íô©—Ätçâ¸¹HùÏtg/((_¿<‹åvÇáVÑT¬]İ  Œzö¬Ïi±è˜É]ŒLœóNÏ¦“usã—Nˆ$Í| È­ç¹š‚Û`O¯[ÏóoÓuøÕÍŒû#i¬È`^ÿéä…¥xêößÆ€ÏTòÇCİ¾ãÇM¼Å.  NÏ¦¥š÷¥ƒépL*›ÄÒNtê-ŸŒ«¨¢DÉ¬dáôlZ¼²  Y‚L.İ4¤uˆüÎó!rZ^ëôlZÚ© °=	OuÓÀÚ˜½xıó @§4nª›ÊõËàÅS8A7t }° tc¿TD´øIùïòÍMdYÀÛ}dùCÆPİ4¨à4¥ö’ l/ºiĞ‹W×gğ†¯#{†§+”·Ë!Ru,Ê¿ÿ½<+ß¸<ƒê‰Ã–v*TûfË__¸$Šˆ–onJóG÷ Lxõğ­”Ü?LZ>c ¼şåÄÇ@­ÙZé:æıÜŸoğ<`C­Ùİ}·ü\æõ?STÈé“Wôâµè¦m†ÿ´‰ç·VñÈÔ¬ëz„QŞSU;Nè+ES‰ÕìR¾SÊğ'ÀmnÀã¡÷©ëxdYI©È£ˆ“íf×@À†G *ßıHŞ5?ğzêì‘qãñbt&é¿uñåSkY¸Ëîßi µ–‡?±,z„bàöÏŠB–?¶ ¶›İ…ñq+ûm(šêc£x¿×Õ.›?€_ÔKÀ'jµ@X·î=Ç ¸ÃzNÛÓø#›@ÛO)aM„´ğ¯ÛQIüÆÆí;”cï
+tg	ÄÜüx,æ¿_˜bÓìf3†™¢> ğTÀÉì^ŸÎÉ[ TÏÃÖÙÿ2’”À(Q½#K¨ÁyÊ°[À•wÈ%sû8c/’@ äD(Ô6»’v‘_ìdøà ^Ğïµ¼ $-"'²	Ïí"?ş'ş(™ÛAM  ™x/ çó±¿ŒO–?¶8aÏ9î´”ø¿âV}÷ZÀ¼‰I z6tÓÀO êÍÙ.øû_ÛìßÕBÀ¶—Î/Ê9ü÷ñ²›(92ÿá$b5» ö(¹Y/æä€¢©pûLõ@!0IÂ q	Œ>¹"İÚ ê1\«…BäıóòcIşƒo·–…à®fEèJğøi5»ÁÎÒøCàöª›&öG‚°»b$:YÍb:˜`ÜáH<‡Î!“ZÈ¢òÑÚ¿ı0§wv÷@îâc€\ŠùõgŠ
+¦§.Æ/…ùãü“!#º•Ö{YEøN6±½)ìèŸò[«Ø`IÌcæ@‹Ûåqewsœ0MŠÅ®~xñ¯µÏ7BØN#uq}Ô$î,@±íÜy&q¾RMa¤ü_Æ$”éàMñÚõKT7ªİªÎÏm#•?´dŠ
+9=zE‰Rn˜œºÈçE3ØÁï¯ii'Œ¡Içw¢h*¸“£=‹Iy¦h*9}òŠ–j´[[˜'Q¶'ÎM%o;}šgÓ´yü÷mdÍ(Q3Ğ¾ŞòşÎùIä~÷RŠ(r”¿Õ“±_äÏ¬d¡}U2ÓÑµÖóÿ×Ù.‡YéI    IEND®B`‚
